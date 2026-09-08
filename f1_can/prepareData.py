@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 from .sensors import Sensors
+from . import WINDOW_SIZE, BATCH_SIZE, STRIDE
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.manual_seed(42)
@@ -14,10 +15,6 @@ np.random.seed(42)
 # PHASE 1: DATA PREPROCESSING & WINDOWING
 # ==========================================
 
-
-WINDOW_SIZE = 20  # 20 timesteps at 10 Hz = 2.0 seconds of history
-STRIDE = 1        # Step size for sliding window
-BATCH_SIZE = 64
 
 
 def prepare_datasets(csv_path: str):

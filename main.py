@@ -26,6 +26,7 @@ def main() -> None:
     parser.add_argument("--max-sessions", type=int, help="limit downloads for a smoke run", default=42)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--trained-model", type=Path, help="reuse previously made model")
+    parser.add_argument("--export-tofp32", type=Path, help="reuse previously made model")
     args = parser.parse_args()
     raw_csv = args.raw_csv or args.output_dir / "fastf1_telemetry.csv" 
     #if there is no raw_csv created before we create a new one at path on right(adding the data to csv is done below)
@@ -37,7 +38,6 @@ def main() -> None:
     train_loader, val_loader, scaler, X_val_t, X_test, X_train_t = (
             prepare_datasets(raw_csv)
         )
-    print(list(X_train_t.size())[2])
     model = ConvAutoencoder1D(in_channels=(list(X_train_t.size())[2]))
     #Data will be form of (Batch, Channels/Features, Window_Size) because this data sent to Conv1D which requires it like this
     if(not args.trained_model):
@@ -54,14 +54,15 @@ def main() -> None:
         )
 
         # 4. Compute Anomaly Threshold
-        threshold_3sigma, threshold_p99 = calculate_anomaly_threshold(
+        calculate_anomaly_threshold(
             model, X_val_t
         )
         # Save trained weights for Phase 4 & Phase 5
         torch.save(model.state_dict(), "autoencoder_ids.pth")
     else:
-        model.load_state_dict(torch.load("autoencoder_ids.pth", weights_only=True))#weights-only means tensors and primitive types not normal weights
-        export_to_onnx(model)
+        model.load_state_dict(torch.load(args.trained_model, weights_only=True))#weights-only means tensors and primitive types not normal weights
+    if(not args.export_tofp32):
+        export_torch_to_onnx(model)
     
     #result = build_archives(raw_csv, args.output_dir, seed=args.seed)
     #print(f"Wrote {result['train']} normal, {result['test']} test, and {result['faulted']} faulted examples to {args.output_dir}")
