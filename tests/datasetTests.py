@@ -8,8 +8,8 @@ from sklearn.preprocessing import StandardScaler
 
 # Import your functions and constants from the source modules
 import f1_can
-from f1_can.prepareData import prepare_datasets, inject_fault, WINDOW_SIZE, generate_evaluation_dataset
-from f1_can.telemetry import _resample_car_data, keepSensorDataColumns
+from f1_can.prepareData import prepare_datasets, inject_fault, WINDOW_SIZE, generate_evaluation_dataset, split_segments, get_loaders_for_window_lists, windows_df, give_scaler
+from f1_can.telemetry import _resample_car_data, keepRequiredColumns
 from f1_can.sensors import Sensors
 
 
@@ -80,12 +80,12 @@ def synthetic_telemetry_csv(tmp_path):
 # =====================================================================
 # UNIT TESTS: 
 # =====================================================================
-class TestKeepSensorDataColumns:
+class TestKeepRequiredColumns:
     def test_missing_required_columns_raises_value_error(self, raw_car_data):
         """Should raise ValueError when required feature columns are missing from input."""
         df_missing = raw_car_data.drop(columns=["RPM"])
         with pytest.raises(ValueError, match="FastF1 car data is missing columns"):
-            keepSensorDataColumns(df_missing)
+            keepRequiredColumns(df_missing)
 
 
 # =====================================================================
