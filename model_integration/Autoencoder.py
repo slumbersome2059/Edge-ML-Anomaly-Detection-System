@@ -99,7 +99,7 @@ def train_autoencoder(
 
     model.to(device)
 
-    max_epochs = 20
+    max_epochs = epochs
     patience = 3
     min_delta = 0.01
 

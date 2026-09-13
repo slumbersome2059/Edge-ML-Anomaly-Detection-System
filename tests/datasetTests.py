@@ -8,7 +8,7 @@ from sklearn.preprocessing import StandardScaler
 
 # Import your functions and constants from the source modules
 import f1_can
-from f1_can.prepareData import prepare_datasets, inject_fault, WINDOW_SIZE, generate_evaluation_dataset, split_segments, get_loaders_for_window_lists, windows_df, give_scaler
+from f1_can.prepareData import prepare_datasets, inject_fault, WINDOW_SIZE, generate_evaluation_dataset
 from f1_can.telemetry import _resample_car_data, keepRequiredColumns
 from f1_can.sensors import Sensors
 
@@ -42,7 +42,8 @@ def sample_window():
         "RPM":[2000.0 for i in range(WINDOW_SIZE)],
         "Speed":[60.0 for i in range(WINDOW_SIZE)],
         "Throttle":[20.0 for i in range(WINDOW_SIZE)],
-        "nGear":[3.0 for i in range(WINDOW_SIZE)]
+        "nGear":[3.0 for i in range(WINDOW_SIZE)],
+        "segment_id":[3.0 for i in range(WINDOW_SIZE//2)] + [2.0 for i in range(WINDOW_SIZE - WINDOW_SIZE//2)]
     })
 
 @pytest.fixture
@@ -212,7 +213,7 @@ class TestGenerateEvaluationDataset:
         #Here the 3D array gets turned into 2D array because of the tuple of length 2
         #The -1 means inference so it infers that length of array must firstDim * secondDim both of sample_test_dataset
         X_tensor, y_test, fault_tags = generate_evaluation_dataset(
-            sample_test_dataset, scaler, anomaly_ratio=0.5, seed=42
+            totalDF, scaler, anomaly_ratio=0.5, seed=42
         )
 
         assert isinstance(X_tensor, torch.Tensor)
@@ -228,8 +229,8 @@ class TestGenerateEvaluationDataset:
         for df in sample_test_dataset:
             totalDF = pd.concat([totalDF, df])
             scaler.fit(totalDF)
-        X1, y1, tags1 = generate_evaluation_dataset(sample_test_dataset, scaler, seed=123)
-        X2, y2, tags2 = generate_evaluation_dataset(sample_test_dataset, scaler, seed=123)
+        X1, y1, tags1 = generate_evaluation_dataset(totalDF, scaler, seed=123)
+        X2, y2, tags2 = generate_evaluation_dataset(totalDF, scaler, seed=123)
 
         torch.testing.assert_close(X1, X2)
         np.testing.assert_array_equal(y1, y2)
