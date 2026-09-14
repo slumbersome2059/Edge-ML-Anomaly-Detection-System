@@ -23,6 +23,7 @@ def prepare_datasets(csv_path: str):
     df = pd.read_csv(csv_path)
 
     # 1. Segment-based dataset split (70% Train, 15% Val, 15% Test)
+    # Splitting by segment_id avoids temporal correlation leakage between splits
     segments = df["segment_id"].unique()
     np.random.shuffle(segments)
 
@@ -41,11 +42,15 @@ def prepare_datasets(csv_path: str):
 
     # 3. Fit Scaler ONLY on training data to prevent leakage
     scaler = StandardScaler()
-    scaler.fit(train_df[feature_cols])
+    scaler.fit(train_df[feature_cols].values)
+    #this calcualates mean and SD, later used in transform to scale things
+    #The scaling/transformation does is z = x - \mu/\sigma, the z score stuff
+    #It is really important you fit on training data, fitting on the other data means 
+    #you gain info about something that is meant to be unknown(test and val are unseen data)
 
     # Transform DataFrames for training and thresholding
     for dframe in [train_df, val_df]:
-        dframe[feature_cols] = scaler.transform(dframe[feature_cols])
+        dframe[feature_cols] = scaler.transform(dframe[feature_cols].values)
 
     def extract_scaled_windows(dframe):
         windows = []
@@ -56,16 +61,40 @@ def prepare_datasets(csv_path: str):
 
     X_train = extract_scaled_windows(train_df)
     X_val = extract_scaled_windows(val_df)
-    X_test, anomalies, anomaly_type = generate_scaled_evaluation_dataset(test_df, scaler)
+    X_test, anomalies, anomaly_type = generate_scaled_evaluation_dataset(test_df, scaler, feature_cols)
 
+    # Currently the shape is (1, Window_Size, Channels/Features)
+    # Convert to PyTorch Conv1D shape: (Batch, Channels/Features, Window_Size)
     X_train_t = torch.tensor(X_train).transpose(1, 2)
     X_val_t = torch.tensor(X_val).transpose(1, 2)
+
+    # A Dataset is a way to store samples and if you need to you can store labels associated with tensors 
+    # so "pos" might be associated with "good review"
+    # Below we don't have any labels and just store the sample
+    # A Dataset is something that represents where data is stored(it could be in 
+    # some file, some nparray), the class requires only a getItem(int idx) method 
+    # which should give you the (sample, label) or just sample if label is not there
 
     train_loader = DataLoader(
         TensorDataset(X_train_t), batch_size=BATCH_SIZE, shuffle=True
     )
+    val_loader = DataLoader(
+            TensorDataset(X_val_t), batch_size=BATCH_SIZE, shuffle=False
+    )
+    # DataLoader is an iterable and when do next on it you end up getting a 
+    # (batch_size, ...) tensor for (N, ...) shaped Dataset
+    """
+    - We normally pass data in batches of batch_size during training(from this we determine 
+    the change in weights and biases) rather than using the whole set of data to produce 
+     one change in weights and biases which means we can get many changes when we iterate 
+     through one set of data
+    - Everytime we iterate through data we select new batch to use to determine change 
+    in weights and biases and eventually you will exhaust all the data(at that point you finish one epoch)
+    - For the next epoch, you should shuffle the batches, using DataLoader has functionality to do this
+    """
+    # the shuffle is saying reshuffle at the end of every epoch
 
-    return train_loader, X_val_t, scaler, X_val, X_test, anomalies, anomaly_type
+    return train_loader, val_loader, scaler, X_val, X_test, anomalies, anomaly_type
 
 
 def inject_fault(raw_window: pd.DataFrame, fault_type: str, rng: np.random.Generator) -> pd.DataFrame:
@@ -109,7 +138,7 @@ def inject_fault(raw_window: pd.DataFrame, fault_type: str, rng: np.random.Gener
 
 
 def generate_scaled_evaluation_dataset(#gives a scaled, UNtransposed 3D array from the dataframe
-    test_df: pd.DataFrame, scaler, anomaly_ratio: float = 0.5, seed: int = 42
+    test_df: pd.DataFrame, scaler, feature_cols, anomaly_ratio: float = 0.5, seed: int = 42
 ):
     """Generates test windows with an equal mix of clean data and injected fault types."""
     rng = np.random.default_rng(seed)
@@ -120,7 +149,7 @@ def generate_scaled_evaluation_dataset(#gives a scaled, UNtransposed 3D array fr
         windows = []
         for _, group in dframe.groupby("segment_id"):
             for start in range(0, len(group) - WINDOW_SIZE + 1, STRIDE):
-                window = group[dframe.columns].iloc[start : start + WINDOW_SIZE].copy()
+                window = group[feature_cols].iloc[start : start + WINDOW_SIZE].copy()
                 windows.append(window)
         return windows
     test_windows = extract_raw_windows(test_df) #in test_windows each window is a dataframe
