@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from .sensors import Sensors
-
+import pickle
 
 
 def _resample_car_data(car_data):
@@ -67,6 +67,7 @@ def extract_2024_races(output: Path, cache_dir: Path, *, year: int = 2024,
     rows = []
     completed = 0#number of completed sessions
     finish = False
+    sorted_segment_ids = []#this will hold the segment_ids sorted by the finishing position in the race
     for _, event in schedule.iterrows():
         try:
             round_number = int(event["RoundNumber"])
@@ -87,7 +88,7 @@ def extract_2024_races(output: Path, cache_dir: Path, *, year: int = 2024,
             print(f"Skipping round {round_number}: {exc}")
             continue
         completed += 1
-        for driver in session.drivers:
+        for driver in session.drivers:#session drivers is sorted by finishing position
             try:
                 laps = session.laps.pick_drivers(driver)
                 segment = _resample_car_data(keepRequiredColumns(laps.get_car_data()))#ONLY DATA BY SENSOR_NAME_COLUMNS is given
@@ -97,13 +98,20 @@ def extract_2024_races(output: Path, cache_dir: Path, *, year: int = 2024,
             if len(segment) < 12:
                 continue
             segment_id = f"{year}-R{round_number:02d}-{driver}"
+            sorted_segment_ids.append(segment_id)
             segment["segment_id"] = segment_id
             rows.append(segment)
         if finish:
             break
+    
     if not rows:
         raise RuntimeError("no valid FastF1 telemetry was extracted")
-    output.parent.mkdir(parents=True, exist_ok=True)
+    output.parent.mkdir(parents=True, exist_ok=True)#if parent doesn't exist it creates, else nothing
+    #parents is that any other ancestors up the tree also get created, 
+    #exist_ok no exception if directory already exists
     result = pd.concat(rows, ignore_index=True)
     result.to_csv(output, index=False)
+    output.cwd
+    with open(output.parent/ "sorted_segment_ids.pkl", "wb") as f:
+        pickle.dump(sorted_segment_ids, f)
     return len(result)

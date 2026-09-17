@@ -13,7 +13,11 @@ class SensorInfo:
     name: str
     max_val: float
     fault: FaultType
-
+    index: int
+    def get_index(self):
+        return self.index
+    def get_index(self, index):
+        self.index = index
 class Sensors:
     RPM = SensorInfo(name="RPM", max_val=16000, fault=FaultType.RPM_SPIKE)
     SPEED = SensorInfo(name="Speed", max_val=400, fault=FaultType.SPEED_OFFSET)

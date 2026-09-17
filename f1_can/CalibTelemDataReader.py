@@ -1,21 +1,12 @@
 import onnxruntime.quantization as quant
+import numpy as np
 from . import WINDOW_SIZE, BATCH_SIZE, STRIDE
 class TelemetryDataReader(quant.CalibrationDataReader):
-    def __init__(self, training_windows):
+    def __init__(self, X_calib_t_for_reader:np.array):
         """
-        - training_windows is the windows produced in prepare dataset
-        - It is of the shape (N, 20, 5)
-        - To build a representative dataset for calibration we sample data randomly
-        - This calibration step is helpful to determine the 
+        - X_calib_t_for_reader is (N, 1, 5, 20) because the quantize needs an extra array wrapped around each window 
+        - This calibration step is used to calculate the quantisation parameters 
         """
-        len_training_windows = len(training_windows)
-        len_sel_windows_indices = 10
-        sel_windows_indices = range(0, len_training_windows, len_training_windows//len_sel_windows_indices)
-        calib_batches = []
-        for i in sel_windows_indices:
-            # Adding batches which are of (Batch_size, num_features, window_size)
-            calib_batches.append({"input" : training_windows[i : i + BATCH_SIZE].transpose([1,2])}) 
-        self.calib_batches = iter(calib_batches)
-        
+        self.data_iter = iter(X_calib_t_for_reader)
     def get_next(self):
         return next(self.data_iter, None)

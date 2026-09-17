@@ -125,11 +125,11 @@ class TestPrepareDatasets:
         """Verifies DataLoader creation, batch shapes, and tensor transpositions."""
         
         # FIXED: Updated unpacking to match the 7 returned variables from prepareData.py
-        train_loader, X_val_t, scaler, X_val, X_test, anomalies, anomaly_type = prepare_datasets(
-            str(synthetic_telemetry_csv)
+        train_loader, X_val_loader, scaler, X_val, X_test, anomalies, anomaly_types, X_calib_t_for_reader = prepare_datasets(
+            str(synthetic_telemetry_csv), [f"2024-R01-driver_{seg_idx}" for seg_idx in range(10)]
         )
 
-        assert isinstance(X_val_t, torch.Tensor)
+        
 
         num_features = 5
         window_size = WINDOW_SIZE
@@ -138,6 +138,8 @@ class TestPrepareDatasets:
         # X_train_t was transposed to (Batch, Features, Window_Size) in prepareData.py
         assert batch.shape[1] == num_features
         assert batch.shape[2] == window_size
+        assert X_calib_t_for_reader.shape[1:] == (1, num_features, window_size)
+        assert X_calib_t_for_reader.shape[0] > 1
 
 class TestInjectFault:    
     def test_valid_values(self, raw_car_data):
