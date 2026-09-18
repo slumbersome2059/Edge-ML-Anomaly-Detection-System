@@ -63,37 +63,25 @@ python3 -m pip install --upgrade pip
 python3 -m pip install -r requirements.txt
 ```
 
-### 2. Run the pipeline
+### 2. Prepare the reproducible data bundle
 
-Run from the repository root. The first run downloads FastF1 sessions and writes the resulting telemetry CSV to `data/fastf1_2024/`; FastF1 downloads are cached in `.cache/fastf1/`.
-
-```bash
-python3 main.py
-```
-
-For a short extraction smoke test, limit the number of race sessions:
+Run from the repository root. The first extraction downloads FastF1 sessions into `data/fastf1_2024/`; FastF1 downloads are cached in `.cache/fastf1/`.
 
 ```bash
-python3 main.py --max-sessions 2
+make extract
+make prepare
+make colab-bundle
 ```
 
-To reuse a telemetry CSV instead of downloading data again:
+`make prepare` freezes the seed-42 race-driver split and writes scaled Colab loaders plus raw Raspberry Pi validation/test windows. It does not train a model.
 
-```bash
-python3 main.py --raw-csv path/to/fastf1_telemetry.csv
-```
+### 3. Train, export, and quantize in Google Colab
 
-The workflow trains for up to 20 epochs, applying early stopping when validation loss stops improving, and saves the trained weights as `autoencoder_ids.pth`.
+Upload `output/colab_training_bundle.zip` to Google Drive and follow [COLAB.md](COLAB.md). Training is intentionally not run on this laptop. Colab exports FP32 ONNX and produces an INT8 static-QDQ ONNX model using training-only calibration windows.
 
-### 3. Export an existing model
+### 4. Validate and test on the Raspberry Pi
 
-Once weights are available, request the export path:
-
-```bash
-python3 main.py --raw-csv path/to/fastf1_telemetry.csv --trained-model autoencoder_ids.pth
-```
-
-This produces `conv_autoencoder_ids.onnx`, which is suitable for an ONNX Runtime-based inference experiment on constrained hardware.
+Use the runner commands in [COLAB.md](COLAB.md) on 64-bit Raspberry Pi OS. The Pi calculates the deployment threshold from clean validation data using the quantized model, then reports held-out detection count and inference latency.
 
 ### 4. Run tests
 

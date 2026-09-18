@@ -1,248 +1,237 @@
+"""Deterministic preparation of training and edge-inference telemetry artifacts."""
+
+from __future__ import annotations
+
+import hashlib
+import json
 import pickle
 from pathlib import Path
-import torch
-import pandas as pd
+from typing import Any
+
 import numpy as np
+import pandas as pd
+import torch
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
 
+from . import BATCH_SIZE, PROCESSED_COLUMNS, STRIDE, WINDOW_SIZE
 from .sensors import Sensors
 
-from . import WINDOW_SIZE, BATCH_SIZE, STRIDE, PROCESSED_COLUMNS
-NUM_FEATURES = 5
+NUM_FEATURES = len(Sensors.SENSOR_NAME_COLUMNS + PROCESSED_COLUMNS)
+SPLIT_SEED = 42
+TRAIN_FRACTION = 0.70
+VALIDATION_FRACTION = 0.15
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-torch.manual_seed(42)
-np.random.seed(42)
-import time
-start_time = time.time()
 
-def give_first_train_segment_id(sorted_whole_segment_ids: list, train_segment_ids: list):
-    """
-    To get training data you split dataset meaning the first finishing race maybe split so you need to look at first in training data.
-    You need this in calibration so that you can cut out unnecessary clipping(first finisher probably has highest speed).
-    I trained the model first before knowing about needing calibration data for quantisation so if I force first to be in train_segs it messes up 
-    the test and validation data so that I may test on data trained on.
-     
-    This is why I did this slightly slower method.
-    """
+def file_sha256(path: Path) -> str:
+    """Return a stable digest used to bind generated artifacts to their source."""
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
-    for i in sorted_whole_segment_ids:
-        if i in train_segment_ids:
-            return i 
-def extract_windows(dframe, feature_cols):
-    windows = []
-    for _, group in dframe.groupby("segment_id"):#groupby is usually used with something that brings data to one cell
-        #if not what it does is give you an iterable with the original dframe split by segment_id so you end up having many dframes 
-        arr = group[feature_cols].to_numpy(dtype=np.float32)
-        n_rows = len(group)
-        segment_windows = [
-            arr[start : start + WINDOW_SIZE]
-            for start in range(0, n_rows - WINDOW_SIZE + 1, STRIDE)
-        ]
-        windows.extend(segment_windows)
-    return windows
-def setup_sensors(feature_cols):
-    for sensor in Sensors.ALL_SENSORS:
-        try:
-            sensor.index = feature_cols.index(sensor.name)
-        except ValueError:
-            raise RuntimeError("The columns of the dataframe to be fed into the " \
-            "training model does not match the ones present in the sensors class ")
-def validate_dframe_cols(df):
-    #This makes sure the code uses all the dframe columns and dframe columns are all code uses
-    if set(df.columns) != set(Sensors.SENSOR_NAME_COLUMNS + PROCESSED_COLUMNS + ["segment_id"]):
-        raise RuntimeError(
-            f"Feature columns mismatch. Expected {Sensors.SENSOR_NAME_COLUMNS + PROCESSED_COLUMNS + ["segment_id"]}, "
-            f"but got {df.columns}. Modify sensor_name_columns, processed_columns in init."
+
+def feature_columns() -> list[str]:
+    """Return the model's canonical raw-feature order."""
+    return Sensors.SENSOR_NAME_COLUMNS + PROCESSED_COLUMNS
+
+
+def validate_dataframe_columns(df: pd.DataFrame) -> None:
+    expected = set(feature_columns() + ["segment_id"])
+    actual = set(df.columns)
+    if actual != expected:
+        raise ValueError(
+            "telemetry columns do not match the model schema: "
+            f"expected {sorted(expected)}, got {sorted(actual)}"
         )
-def prepare_datasets(csv_path: str, sorted_segment_ids):
-    """Processes raw CSV telemetry and extracts training loader, validation tensors,
 
-    scaler, and raw unscaled validation/test windows.
-    """
-    np.random.seed(42)
-    df = pd.read_csv(csv_path)
-    # 1. Segment-based dataset split (70% Train, 15% Val, 15% Test)
-    # Splitting by segment_id avoids temporal correlation leakage between splits
-    segments = df["segment_id"].unique()
-    np.random.shuffle(segments)
-    print("--- %s seconds ---" % (time.time() - start_time))
 
-    n_train = int(len(segments) * 0.70)
-    n_val = int(len(segments) * 0.15)
+def extract_windows(dframe: pd.DataFrame, columns: list[str]) -> np.ndarray:
+    """Create windows without crossing a race-driver segment boundary."""
+    windows: list[np.ndarray] = []
+    for _, group in dframe.groupby("segment_id", sort=False):
+        values = group[columns].to_numpy(dtype=np.float32)
+        for start in range(0, len(values) - WINDOW_SIZE + 1, STRIDE):
+            windows.append(values[start : start + WINDOW_SIZE])
+    if not windows:
+        return np.empty((0, WINDOW_SIZE, len(columns)), dtype=np.float32)
+    return np.stack(windows).astype(np.float32, copy=False)
 
-    train_segs = segments[:n_train]
-    val_segs = segments[n_train : n_train + n_val]
-    test_segs = segments[n_train + n_val :]
 
-    train_df = df[df["segment_id"].isin(train_segs)].copy()
-    val_df = df[df["segment_id"].isin(val_segs)].copy()
-    test_df = df[df["segment_id"].isin(test_segs)].copy()
-
-    calib_df = df[df["segment_id"] == give_first_train_segment_id(sorted_segment_ids, train_segs)].copy()
-
-    feature_cols = [c for c in df.columns if c != "segment_id"]
-
-    validate_dframe_cols(df)
-
-    setup_sensors(feature_cols)
-    NUM_FEATURES = len(feature_cols)#USED IN OTHER FILE
-
-    print("--- %s seconds ---" % (time.time() - start_time))
-
-    # 3. Fit Scaler ONLY on training data to prevent leakage
-    scaler = StandardScaler()
-    scaler.fit(train_df[feature_cols].values)
-    #this calcualates mean and SD, later used in transform to scale things
-    #The scaling/transformation does is z = x - \mu/\sigma, the z score stuff
-    #It is really important you fit on training data, fitting on the other data means 
-    #you gain info about something that is meant to be unknown(test and val are unseen data)
-
-    # Transform DataFrames for training and thresholding
-    for dframe in [train_df, val_df, calib_df]:
-        dframe[feature_cols] = scaler.transform(dframe[feature_cols].values)#this is fine the columns aren't also added to nparray
-
-    print("--- %s seconds ---" % (time.time() - start_time))
-
-    X_train = extract_windows(train_df, feature_cols)
-    X_val = extract_windows(val_df, feature_cols)
-    X_calib = extract_windows(calib_df, feature_cols)
-
-    print("--- %s seconds ---" % (time.time() - start_time))
-
-    X_test, anomalies, anomaly_types = generate_scaled_evaluation_dataset(test_df, scaler, feature_cols)
-
-    print("--- %s seconds ---" % (time.time() - start_time))
-    # Currently the shape is (1, Window_Size, Channels/Features)
-    # Convert to PyTorch Conv1D shape: (Batch, Channels/Features, Window_Size)
-    X_train_t = torch.tensor(np.array(X_train)).transpose(1, 2)
-    X_val_t = torch.tensor(np.array(X_train)).transpose(1, 2)
-    X_calib_t = np.transpose(np.array(X_calib), (0, 2, 1))
-    X_calib_t_for_reader = np.expand_dims(X_calib_t, 1)
-
-    # A Dataset is a way to store samples and if you need to you can store labels associated with tensors 
-    # so "pos" might be associated with "good review"
-    # Below we don't have any labels and just store the sample
-    # A Dataset is something that represents where data is stored(it could be in 
-    # some file, some nparray), the class requires only a getItem(int idx) method 
-    # which should give you the (sample, label) or just sample if label is not there
-    train_loader = DataLoader(
-        TensorDataset(X_train_t), batch_size=BATCH_SIZE, shuffle=True
+def _legacy_seeded_split(segment_ids: np.ndarray, seed: int) -> tuple[list[str], list[str], list[str]]:
+    """Preserve the project's original ``np.random.seed(); shuffle()`` split."""
+    shuffled = np.array(segment_ids, dtype=object, copy=True)
+    legacy_rng = np.random.RandomState(seed)
+    legacy_rng.shuffle(shuffled)
+    train_end = int(len(shuffled) * TRAIN_FRACTION)
+    validation_end = train_end + int(len(shuffled) * VALIDATION_FRACTION)
+    return (
+        shuffled[:train_end].tolist(),
+        shuffled[train_end:validation_end].tolist(),
+        shuffled[validation_end:].tolist(),
     )
-    val_loader = DataLoader(
-            TensorDataset(X_val_t), batch_size=BATCH_SIZE, shuffle=False
-    )
-    # DataLoader is an iterable and when do next on it you end up getting a 
-    # (batch_size, ...) tensor for (N, ...) shaped Dataset
-    """
-    - We normally pass data in batches of batch_size during training(from this we determine 
-    the change in weights and biases) rather than using the whole set of data to produce 
-     one change in weights and biases which means we can get many changes when we iterate 
-     through one set of data
-    - Everytime we iterate through data we select new batch to use to determine change 
-    in weights and biases and eventually you will exhaust all the data(at that point you finish one epoch)
-    - For the next epoch, you should shuffle the batches, using DataLoader has functionality to do this
-    """
-    # the shuffle is saying reshuffle at the end of every epoch
-
-    return train_loader, val_loader, scaler, X_val, X_test, anomalies, anomaly_types, X_calib_t_for_reader
 
 
-def inject_fault(raw_window: np.ndarray, fault_type: str, rng: np.random.Generator) -> pd.DataFrame:
-    """Injects CAN bus sensor faults into raw unscaled window DataFrame."""
-    result = raw_window.copy()
-    randSize = rng.choice([2,3,4,5])
-    start = rng.integers(0, WINDOW_SIZE - randSize)  # Fault begins partway through window
+def _load_or_create_manifest(
+    csv_path: Path,
+    sorted_segment_ids: list[str],
+    manifest_path: Path,
+    *,
+    seed: int,
+    regenerate_split: bool,
+) -> dict[str, Any]:
+    """Persist split membership so later preparation cannot silently reshuffle it."""
+    raw_hash = file_sha256(csv_path)
+    sorted_hash = hashlib.sha256(json.dumps(sorted_segment_ids, separators=(",", ":")).encode("utf-8")).hexdigest()
+    if manifest_path.exists() and not regenerate_split:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("raw_csv_sha256") != raw_hash:
+            raise RuntimeError(
+                "raw telemetry differs from the existing preparation manifest; "
+                "pass --regenerate-split to intentionally create a new split"
+            )
+        if manifest.get("feature_columns") != feature_columns() or manifest.get("window_size") != WINDOW_SIZE:
+            raise RuntimeError("existing preparation manifest is incompatible with the current feature schema")
+        if manifest.get("sorted_segment_ids_sha256") != sorted_hash:
+            raise RuntimeError("sorted segment order differs from the existing preparation manifest")
+        return manifest
 
-    
-    # index list is, so list that stores the stuff before , on loc 
-    # this list could be string labels
-    # if you want to use integers no matter the index use iloc, which is loc but works only with integers
-    slice_idx = slice(start, start + randSize)
+    df = pd.read_csv(csv_path, usecols=["segment_id"])
+    all_segments = df["segment_id"].drop_duplicates().to_numpy()
+    train_ids, validation_ids, test_ids = _legacy_seeded_split(all_segments, seed)
+    train_set = set(train_ids)
+    calibration_id = next((segment for segment in sorted_segment_ids if segment in train_set), None)
+    if calibration_id is None:
+        raise RuntimeError("no sorted calibration segment belongs to the training split")
+    return {
+        "schema_version": 1,
+        "raw_csv_sha256": raw_hash,
+        "sorted_segment_ids_sha256": sorted_hash,
+        "seed": seed,
+        "feature_columns": feature_columns(),
+        "window_size": WINDOW_SIZE,
+        "stride": STRIDE,
+        "split_fractions": {"train": TRAIN_FRACTION, "validation": VALIDATION_FRACTION, "test": 1 - TRAIN_FRACTION - VALIDATION_FRACTION},
+        "split_segment_ids": {"train": train_ids, "validation": validation_ids, "test": test_ids},
+        "calibration_segment_id": calibration_id,
+    }
+
+
+def inject_fault(raw_window: np.ndarray, fault_type: str, rng: np.random.Generator) -> np.ndarray:
+    """Inject one bounded synthetic fault into an unscaled telemetry window."""
+    result = np.array(raw_window, dtype=np.float32, copy=True)
+    duration = int(rng.choice((2, 3, 4, 5)))
+    start = int(rng.integers(0, WINDOW_SIZE - duration + 1))
+    affected = slice(start, start + duration)
     if fault_type == Sensors.RPM.fault.value:
         sensor = Sensors.RPM
-        print(result[slice_idx, sensor.index])
-        result[slice_idx, sensor.index] = np.clip(
-            result[slice_idx, sensor.index] * rng.uniform(1.45, 1.9),
-            0,
-            sensor.max_val,
-        )
-        print(result[slice_idx, sensor.index])
+        result[affected, sensor.index] = np.clip(result[affected, sensor.index] * rng.uniform(1.45, 1.9), 0, sensor.max_val)
     elif fault_type == Sensors.SPEED.fault.value:
         sensor = Sensors.SPEED
-        result[slice_idx, sensor.index] = np.clip(
-            result[slice_idx, sensor.index] + rng.choice((-1, 1)) * rng.uniform(55, 90),
-            0,
-            sensor.max_val,
-        )
+        result[affected, sensor.index] = np.clip(result[affected, sensor.index] + rng.choice((-1, 1)) * rng.uniform(55, 90), 0, sensor.max_val)
     elif fault_type == Sensors.THROTTLE.fault.value:
         sensor = Sensors.THROTTLE
-        result[slice_idx, sensor.index] = rng.choice((0, sensor.max_val))
-    elif fault_type == Sensors.GEAR.fault.value:  # gear manipulation
+        result[affected, sensor.index] = rng.choice((0, sensor.max_val))
+    elif fault_type == Sensors.GEAR.fault.value:
         sensor = Sensors.GEAR
-        result[slice_idx, sensor.index] = np.clip(
-            result[slice_idx, sensor.index] + rng.choice((-3, -2, 2, 3)),
-            0,
-            sensor.max_val,
-        )
-
+        result[affected, sensor.index] = np.clip(result[affected, sensor.index] + rng.choice((-3, -2, 2, 3)), 0, sensor.max_val)
+    else:
+        raise ValueError(f"unknown fault type: {fault_type}")
     return result
 
 
-def generate_scaled_evaluation_dataset(#gives a scaled, UNtransposed 3D array from the dataframe
-    test_df: pd.DataFrame, scaler, feature_cols, anomaly_ratio: float = 0.5, seed: int = 42
-):
-    """Generates test windows with an equal mix of clean data and injected fault types."""
+def generate_evaluation_dataset(
+    test_df: pd.DataFrame,
+    columns: list[str],
+    *,
+    anomaly_ratio: float = 0.5,
+    seed: int = SPLIT_SEED,
+) -> tuple[np.ndarray, np.ndarray, list[str]]:
+    """Return deterministic raw held-out windows and labels; do not scale them here."""
+    if not 0 <= anomaly_ratio <= 1:
+        raise ValueError("anomaly_ratio must be between zero and one")
     rng = np.random.default_rng(seed)
-    processed_windows = []
-    labels = []  # 0: Normal, 1: Anomaly
-    fault_tags = []
-    print(test_df.columns)
-    
-    test_windows = extract_windows(test_df, feature_cols) #in test_windows each window is a dataframe
-    print(len(test_windows))
-    randNums = rng.random((len(test_windows)))
-    for (randNum, window) in zip(randNums, test_windows):
-        is_anomaly = randNum < anomaly_ratio #this is faster than rng.choice, even faster to create all the randoms at once
-        if is_anomaly:
+    windows = extract_windows(test_df, columns)
+    result = np.empty_like(windows)
+    labels = np.zeros(len(windows), dtype=np.int8)
+    fault_tags: list[str] = []
+    for index, window in enumerate(windows):
+        if rng.random() < anomaly_ratio:
             fault = rng.choice(Sensors.FAULT_TYPES)
-            fault_str = fault.value
-            modified_window = inject_fault(window, fault, rng)
-            label = 1
+            result[index] = inject_fault(window, fault.value, rng)
+            labels[index] = 1
+            fault_tags.append(fault.value)
         else:
-            fault_str = "clean"
-            modified_window = window.copy()
-            label = 0
-
-        scaled_window = scaler.transform(np.array(modified_window))
-        processed_windows.append(scaled_window)
-        labels.append(label)
-        fault_tags.append(fault_str)
-
-    X_test = np.array(processed_windows, dtype=np.float32)
-    y_test = np.array(labels, dtype=int)
-
-    return X_test, y_test, fault_tags
+            result[index] = window
+            fault_tags.append("clean")
+    return result, labels, fault_tags
 
 
-def save_processed_data(output_dir: Path, train_loader, val_loader, scaler, val_scaled_windows, test_scaled_windows, anomalies, anomaly_types, X_calib_t_for_reader):
-    """Serializes dataset splits and scaler into pickle files."""
+def prepare_datasets(
+    csv_path: str | Path,
+    sorted_segment_ids: list[str],
+    *,
+    manifest_path: str | Path | None = None,
+    seed: int = SPLIT_SEED,
+    regenerate_split: bool = False,
+) -> tuple[DataLoader, DataLoader, StandardScaler, np.ndarray, np.ndarray, np.ndarray, list[str], np.ndarray, dict[str, Any]]:
+    """Prepare training loaders and unscaled edge validation/test artifacts."""
+    source_path = Path(csv_path)
+    target_manifest = Path(manifest_path) if manifest_path else source_path.with_suffix(".manifest.json")
+    manifest = _load_or_create_manifest(source_path, sorted_segment_ids, target_manifest, seed=seed, regenerate_split=regenerate_split)
+    df = pd.read_csv(source_path)
+    validate_dataframe_columns(df)
+    columns = feature_columns()
+    split_ids = manifest["split_segment_ids"]
+    train_df = df[df["segment_id"].isin(split_ids["train"])]
+    validation_df = df[df["segment_id"].isin(split_ids["validation"])]
+    test_df = df[df["segment_id"].isin(split_ids["test"])]
+    if train_df.empty or validation_df.empty or test_df.empty:
+        raise RuntimeError("each persisted split must contain telemetry rows")
+
+    scaler = StandardScaler().fit(train_df[columns].to_numpy())
+    float_columns = {column: np.float64 for column in columns}
+    scaled_train = train_df.copy().astype(float_columns)
+    scaled_validation = validation_df.copy().astype(float_columns)
+    scaled_train.loc[:, columns] = scaler.transform(train_df[columns].to_numpy())
+    scaled_validation.loc[:, columns] = scaler.transform(validation_df[columns].to_numpy())
+    train_windows = extract_windows(scaled_train, columns)
+    validation_windows = extract_windows(scaled_validation, columns)
+    validation_raw_windows = extract_windows(validation_df, columns)
+    calibration_df = df[df["segment_id"] == manifest["calibration_segment_id"]]
+    calibration_windows = extract_windows(calibration_df, columns)
+    if not len(train_windows) or not len(validation_windows) or not len(calibration_windows):
+        raise RuntimeError("a split does not contain enough samples for one telemetry window")
+    calibration_scaled = scaler.transform(calibration_windows.reshape(-1, NUM_FEATURES)).reshape(calibration_windows.shape).astype(np.float32)
+    calibration_for_reader = np.expand_dims(np.transpose(calibration_scaled, (0, 2, 1)), axis=1)
+    test_raw_windows, labels, fault_tags = generate_evaluation_dataset(test_df, columns, seed=seed)
+    train_tensor = torch.from_numpy(np.transpose(train_windows, (0, 2, 1)).astype(np.float32))
+    validation_tensor = torch.from_numpy(np.transpose(validation_windows, (0, 2, 1)).astype(np.float32))
+    train_loader = DataLoader(TensorDataset(train_tensor), batch_size=BATCH_SIZE, shuffle=True)
+    validation_loader = DataLoader(TensorDataset(validation_tensor), batch_size=BATCH_SIZE, shuffle=False)
+    manifest["artifact_counts"] = {
+        "train_windows": int(len(train_windows)), "validation_windows": int(len(validation_windows)),
+        "test_windows": int(len(test_raw_windows)), "calibration_windows": int(len(calibration_for_reader)),
+    }
+    return train_loader, validation_loader, scaler, validation_raw_windows, test_raw_windows, labels, fault_tags, calibration_for_reader, manifest
+
+
+def save_processed_data(
+    output_dir: Path, train_loader: DataLoader, validation_loader: DataLoader, scaler: StandardScaler,
+    validation_raw_windows: np.ndarray, test_raw_windows: np.ndarray, labels: np.ndarray,
+    fault_tags: list[str], calibration_for_reader: np.ndarray, manifest: dict[str, Any],
+) -> None:
+    """Write Colab-training and Pi-inference artifacts with explicit scaling ownership."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    with open(output_dir / "train_loader.pkl", "wb") as f:
-        pickle.dump(train_loader, f)
-    with open(output_dir / "val_loader.pkl", "wb") as f:
-        pickle.dump(val_loader, f)
-    with open(output_dir / "scaler.pkl", "wb") as f:
-        pickle.dump(scaler, f)
-    with open(output_dir / "val_scaled_windows.pkl", "wb") as f:
-        pickle.dump(val_scaled_windows, f)
-    with open(output_dir / "test_scaled_windows.pkl", "wb") as f:
-        pickle.dump(test_scaled_windows, f)
-    with open(output_dir / "anomalies.pkl", "wb") as f:
-            pickle.dump(anomalies, f)
-    with open(output_dir / "anomaly_types.pkl", "wb") as f:
-            pickle.dump(anomaly_types, f)
-    with open(output_dir / "X_calib_t_for_reader.pkl", "wb") as f:
-            pickle.dump(X_calib_t_for_reader, f)
-    
+    for name, value in (("train_loader.pkl", train_loader), ("val_loader.pkl", validation_loader), ("X_calib_t_for_reader.pkl", calibration_for_reader)):
+        with (output_dir / name).open("wb") as destination:
+            pickle.dump(value, destination)
+    np.save(output_dir / "validation_raw_windows.npy", validation_raw_windows, allow_pickle=False)
+    np.save(output_dir / "test_raw_windows.npy", test_raw_windows, allow_pickle=False)
+    np.save(output_dir / "test_labels.npy", labels, allow_pickle=False)
+    (output_dir / "test_fault_tags.json").write_text(json.dumps(fault_tags), encoding="utf-8")
+    preprocessing = {"schema_version": 1, "feature_columns": feature_columns(), "window_size": WINDOW_SIZE,
+                     "mean": np.asarray(scaler.mean_, dtype=float).tolist(), "scale": np.asarray(scaler.scale_, dtype=float).tolist()}
+    (output_dir / "preprocessing.json").write_text(json.dumps(preprocessing, indent=2) + "\n", encoding="utf-8")
+    (output_dir / "preparation_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
