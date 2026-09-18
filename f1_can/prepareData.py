@@ -8,12 +8,14 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from .sensors import Sensors
 
-from . import WINDOW_SIZE, BATCH_SIZE, STRIDE
+from . import WINDOW_SIZE, BATCH_SIZE, STRIDE, PROCESSED_COLUMNS
 NUM_FEATURES = 5
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.manual_seed(42)
 np.random.seed(42)
+import time
+start_time = time.time()
 
 def give_first_train_segment_id(sorted_whole_segment_ids: list, train_segment_ids: list):
     """
@@ -40,6 +42,20 @@ def extract_windows(dframe, feature_cols):
         ]
         windows.extend(segment_windows)
     return windows
+def setup_sensors(feature_cols):
+    for sensor in Sensors.ALL_SENSORS:
+        try:
+            sensor.index = feature_cols.index(sensor.name)
+        except ValueError:
+            raise RuntimeError("The columns of the dataframe to be fed into the " \
+            "training model does not match the ones present in the sensors class ")
+def validate_dframe_cols(df):
+    #This makes sure the code uses all the dframe columns and dframe columns are all code uses
+    if set(df.columns) != set(Sensors.SENSOR_NAME_COLUMNS + PROCESSED_COLUMNS + ["segment_id"]):
+        raise RuntimeError(
+            f"Feature columns mismatch. Expected {Sensors.SENSOR_NAME_COLUMNS + PROCESSED_COLUMNS + ["segment_id"]}, "
+            f"but got {df.columns}. Modify sensor_name_columns, processed_columns in init."
+        )
 def prepare_datasets(csv_path: str, sorted_segment_ids):
     """Processes raw CSV telemetry and extracts training loader, validation tensors,
 
@@ -47,12 +63,11 @@ def prepare_datasets(csv_path: str, sorted_segment_ids):
     """
     np.random.seed(42)
     df = pd.read_csv(csv_path)
-    print(df.memory_usage())
-
     # 1. Segment-based dataset split (70% Train, 15% Val, 15% Test)
     # Splitting by segment_id avoids temporal correlation leakage between splits
     segments = df["segment_id"].unique()
     np.random.shuffle(segments)
+    print("--- %s seconds ---" % (time.time() - start_time))
 
     n_train = int(len(segments) * 0.70)
     n_val = int(len(segments) * 0.15)
@@ -68,16 +83,13 @@ def prepare_datasets(csv_path: str, sorted_segment_ids):
     calib_df = df[df["segment_id"] == give_first_train_segment_id(sorted_segment_ids, train_segs)].copy()
 
     feature_cols = [c for c in df.columns if c != "segment_id"]
-    
+
+    validate_dframe_cols(df)
+
+    setup_sensors(feature_cols)
     NUM_FEATURES = len(feature_cols)#USED IN OTHER FILE
 
-    for sensor in Sensors.ALL_SENSORS:
-        try:
-            sensor.indexfeature_cols.index(sensor.name)
-        except ValueError:
-            raise RuntimeError("The columns of the dataframe to be fed into the " \
-            "training model does not match the ones present in the sensors class ")
-        
+    print("--- %s seconds ---" % (time.time() - start_time))
 
     # 3. Fit Scaler ONLY on training data to prevent leakage
     scaler = StandardScaler()
@@ -91,14 +103,21 @@ def prepare_datasets(csv_path: str, sorted_segment_ids):
     for dframe in [train_df, val_df, calib_df]:
         dframe[feature_cols] = scaler.transform(dframe[feature_cols].values)#this is fine the columns aren't also added to nparray
 
+    print("--- %s seconds ---" % (time.time() - start_time))
+
     X_train = extract_windows(train_df, feature_cols)
     X_val = extract_windows(val_df, feature_cols)
     X_calib = extract_windows(calib_df, feature_cols)
+
+    print("--- %s seconds ---" % (time.time() - start_time))
+
     X_test, anomalies, anomaly_types = generate_scaled_evaluation_dataset(test_df, scaler, feature_cols)
+
+    print("--- %s seconds ---" % (time.time() - start_time))
     # Currently the shape is (1, Window_Size, Channels/Features)
     # Convert to PyTorch Conv1D shape: (Batch, Channels/Features, Window_Size)
-    X_train_t = torch.tensor(X_train).transpose(1, 2)
-    X_val_t = torch.tensor(X_val).transpose(1, 2)
+    X_train_t = torch.tensor(np.array(X_train)).transpose(1, 2)
+    X_val_t = torch.tensor(np.array(X_train)).transpose(1, 2)
     X_calib_t = np.transpose(np.array(X_calib), (0, 2, 1))
     X_calib_t_for_reader = np.expand_dims(X_calib_t, 1)
 
@@ -136,33 +155,34 @@ def inject_fault(raw_window: np.ndarray, fault_type: str, rng: np.random.Generat
     randSize = rng.choice([2,3,4,5])
     start = rng.integers(0, WINDOW_SIZE - randSize)  # Fault begins partway through window
 
-    # Retrieve the target rows' index to use with .loc
-    target_idx = result.index[start:start + randSize]#this extracts whatever the 
+    
     # index list is, so list that stores the stuff before , on loc 
     # this list could be string labels
     # if you want to use integers no matter the index use iloc, which is loc but works only with integers
-
+    slice_idx = slice(start, start + randSize)
     if fault_type == Sensors.RPM.fault.value:
         sensor = Sensors.RPM
-        result.loc[target_idx, sensor.name] = np.clip(
-            result.loc[target_idx, sensor.name] * rng.uniform(1.45, 1.9),
+        print(result[slice_idx, sensor.index])
+        result[slice_idx, sensor.index] = np.clip(
+            result[slice_idx, sensor.index] * rng.uniform(1.45, 1.9),
             0,
             sensor.max_val,
         )
+        print(result[slice_idx, sensor.index])
     elif fault_type == Sensors.SPEED.fault.value:
         sensor = Sensors.SPEED
-        result.loc[target_idx, sensor.name] = np.clip(
-            result.loc[target_idx, sensor.name] + rng.choice((-1, 1)) * rng.uniform(55, 90),
+        result[slice_idx, sensor.index] = np.clip(
+            result[slice_idx, sensor.index] + rng.choice((-1, 1)) * rng.uniform(55, 90),
             0,
             sensor.max_val,
         )
     elif fault_type == Sensors.THROTTLE.fault.value:
         sensor = Sensors.THROTTLE
-        result.loc[target_idx, sensor.name] = rng.choice((0, sensor.max_val))
-    else:  # gear manipulation
+        result[slice_idx, sensor.index] = rng.choice((0, sensor.max_val))
+    elif fault_type == Sensors.GEAR.fault.value:  # gear manipulation
         sensor = Sensors.GEAR
-        result.loc[target_idx, sensor.name] = np.clip(
-            result.loc[target_idx, sensor.name] + rng.choice((-3, -2, 2, 3)),
+        result[slice_idx, sensor.index] = np.clip(
+            result[slice_idx, sensor.index] + rng.choice((-3, -2, 2, 3)),
             0,
             sensor.max_val,
         )
@@ -178,11 +198,13 @@ def generate_scaled_evaluation_dataset(#gives a scaled, UNtransposed 3D array fr
     processed_windows = []
     labels = []  # 0: Normal, 1: Anomaly
     fault_tags = []
+    print(test_df.columns)
     
     test_windows = extract_windows(test_df, feature_cols) #in test_windows each window is a dataframe
     print(len(test_windows))
-    for window in test_windows:
-        is_anomaly = rng.random() < anomaly_ratio
+    randNums = rng.random((len(test_windows)))
+    for (randNum, window) in zip(randNums, test_windows):
+        is_anomaly = randNum < anomaly_ratio #this is faster than rng.choice, even faster to create all the randoms at once
         if is_anomaly:
             fault = rng.choice(Sensors.FAULT_TYPES)
             fault_str = fault.value

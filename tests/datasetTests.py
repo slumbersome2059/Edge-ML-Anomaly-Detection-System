@@ -34,20 +34,29 @@ def raw_car_data():
 
 @pytest.fixture
 def sample_window():
+    """Returns a single clean window of shape (4, 20)."""
+    a = np.array([
+        [2000.0 for i in range(WINDOW_SIZE)],
+        [60.0 for i in range(WINDOW_SIZE)],
+        [20.0 for i in range(WINDOW_SIZE)],
+        [3.0 for i in range(WINDOW_SIZE)],
+    ], dtype=np.float32)
+    b = np.transpose(a, (1, 0))
+    return b
+
+@pytest.fixture
+def test_df():
     """Returns a single clean window of shape (20, 4)."""
-    return pd.DataFrame({
+    window = pd.DataFrame({
         "RPM":[2000.0 for i in range(WINDOW_SIZE)],
         "Speed":[60.0 for i in range(WINDOW_SIZE)],
         "Throttle":[20.0 for i in range(WINDOW_SIZE)],
         "nGear":[3.0 for i in range(WINDOW_SIZE)],
-        "segment_id":[3.0 for i in range(WINDOW_SIZE//2)] + [2.0 for i in range(WINDOW_SIZE - WINDOW_SIZE//2)]
+        "DeltaTime":[3.0 for i in range(WINDOW_SIZE//2)] + [2.0 for i in range(WINDOW_SIZE - WINDOW_SIZE//2)],
+        "segment_id":[3.0 for i in range(WINDOW_SIZE//2)] + [2.0 for i in range(WINDOW_SIZE - WINDOW_SIZE//2)],
     }, dtype=np.float32)
+    return pd.concat([window for i in range(0, 10)])
 
-@pytest.fixture
-def sample_test_dataset(sample_window):
-    """Returns a batch of raw windows of shape (10, 20, 4)."""
-    rng = np.random.default_rng(0)
-    return [sample_window for i in range(10)]
 
 
 @pytest.fixture
@@ -151,69 +160,77 @@ class TestInjectFault:
             resampled.iloc[10:, resampled.columns.get_loc(sensor.name)] = 0
             
         for sensor in sensor_configs:
-            injected_df = inject_fault(resampled, sensor.fault.value, np.random.default_rng())
+            injected_df = inject_fault(np.array(resampled, dtype=np.float32), sensor.fault.value, np.random.default_rng())
             
-            assert (injected_df[sensor.name] <= sensor.max_val).all()
-            assert (injected_df[sensor.name] >= 0).all()
+            assert (injected_df[:, sensor.index] <= sensor.max_val).all()
+            assert (injected_df[:, sensor.index] >= 0).all()
 
 
     @pytest.mark.parametrize("fault_type", ["rpm_spike", "speed_offset", "throttle_stuck", "gear"])
     def test_inject_fault_modifies_data(self, sample_window, fault_type):
         """Verify that inject_fault actually modifies the returned array without mutating original."""
         rng = np.random.default_rng(42)
-        sample_window = pd.DataFrame(sample_window)
-        original_copy = np.copy(sample_window)
+        original = sample_window.copy()
         
         modified = inject_fault(sample_window, fault_type, rng)
         
-        np.testing.assert_array_equal(sample_window, original_copy)
-        assert not np.array_equal(sample_window, modified)
+        assert not np.array_equal(original, modified)
 
     @pytest.mark.parametrize("fault_type", ["rpm_spike", "speed_offset", "throttle_stuck", "gear"])
     def test_inject_fault_output_shape_and_type(self, sample_window, fault_type):
         """Verify output shape and type preservation for all fault types."""
         rng = np.random.default_rng(42)
-        modified = inject_fault(sample_window, fault_type, rng)
+        modified = inject_fault(np.array(sample_window), fault_type, rng)
         
-        assert isinstance(modified, pd.DataFrame)
+        assert isinstance(modified, np.ndarray)
         assert modified.shape == sample_window.shape
 
 # FIXED: Renamed class and methods to match new generate_scaled_evaluation_dataset
 class TestGenerateScaledEvaluationDataset:
-    def test_generate_scaled_evaluation_dataset_output_shapes(self, sample_test_dataset):
-        num_windows, window_size, n_features = (len(sample_test_dataset), len(sample_test_dataset[0]), len(sample_test_dataset[0].loc[0]))
+    def test_generate_scaled_evaluation_dataset_output_shapes(self, test_df):
         
         scaler = StandardScaler()
-        totalDF = pd.concat(sample_test_dataset)
         
         # Drop string segment_id column just for the scaler fit (to simulate normal behavior)
-        feature_cols = [c for c in totalDF.columns if c != "segment_id"]
-        scaler.fit(np.array(totalDF[feature_cols]))
+        feature_cols = [c for c in test_df.columns if c != "segment_id"]
+        scaler.fit(np.array(test_df[feature_cols]))
         
         # FIXED: Calling the updated function
         X_array, y_test, fault_tags = generate_scaled_evaluation_dataset(
-            totalDF, scaler, feature_cols, anomaly_ratio=0.5, seed=42
+            test_df, scaler, feature_cols, anomaly_ratio=0.5, seed=42
         )
 
         # FIXED: Asserts updated because prepareData.py currently returns an untransposed numpy array
         assert isinstance(X_array, np.ndarray)
         num_windows = 0
-        for _, group in totalDF.groupby("segment_id"):
-            num_windows += len(group) + 1 - window_size
-        assert X_array.shape == (num_windows, window_size, len(feature_cols))
+        for _, group in test_df.groupby("segment_id"):
+            num_windows += len(group) + 1 - WINDOW_SIZE
+        assert X_array.shape == (num_windows, WINDOW_SIZE, len(feature_cols))
         assert y_test.shape == (num_windows,)
         assert len(fault_tags) == num_windows
+    def test_generate_scaled_evaluation_dataset_scaled_data(self, test_df):
+        #checks if data is scaled
+        scaler = StandardScaler()
+        
+        # Drop string segment_id column just for the scaler fit (to simulate normal behavior)
+        feature_cols = [c for c in test_df.columns if c != "segment_id"]
+        scaler.fit(np.array(test_df[feature_cols]))
+        
+        # FIXED: Calling the updated function
+        X_array, y_test, fault_tags = generate_scaled_evaluation_dataset(
+            test_df, scaler, feature_cols, anomaly_ratio=0.5, seed=42
+        )
 
-
-    def test_generate_scaled_evaluation_dataset_reproducibility(self, sample_test_dataset):
+        # FIXED: Asserts updated because prepareData.py currently returns an untransposed numpy array
+        assert not np.array_equal(X_array[0], np.array(test_df.iloc[0:20, 0:5]))
+    def test_generate_scaled_evaluation_dataset_reproducibility(self, test_df):
         """Verify that passing the same seed yields deterministic outputs."""
         scaler = StandardScaler()
-        totalDF = pd.concat(sample_test_dataset)
-        feature_cols = [c for c in totalDF.columns if c != "segment_id"]
-        scaler.fit(np.array(totalDF[feature_cols]))
+        feature_cols = [c for c in test_df.columns if c != "segment_id"]
+        scaler.fit(np.array(test_df[feature_cols]))
         
-        X1, y1, tags1 = generate_scaled_evaluation_dataset(totalDF, scaler, feature_cols, seed=123)
-        X2, y2, tags2 = generate_scaled_evaluation_dataset(totalDF, scaler, feature_cols, seed=123)
+        X1, y1, tags1 = generate_scaled_evaluation_dataset(test_df, scaler, feature_cols, seed=123)
+        X2, y2, tags2 = generate_scaled_evaluation_dataset(test_df, scaler, feature_cols, seed=123)
 
         np.testing.assert_allclose(X1, X2)
         np.testing.assert_array_equal(y1, y2)
