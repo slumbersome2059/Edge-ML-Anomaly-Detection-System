@@ -18,14 +18,6 @@ import time
 start_time = time.time()
 
 def give_first_train_segment_id(sorted_whole_segment_ids: list, train_segment_ids: list):
-    """
-    To get training data you split dataset meaning the first finishing race maybe split so you need to look at first in training data.
-    You need this in calibration so that you can cut out unnecessary clipping(first finisher probably has highest speed).
-    I trained the model first before knowing about needing calibration data for quantisation so if I force first to be in train_segs it messes up 
-    the test and validation data so that I may test on data trained on.
-     
-    This is why I did this slightly slower method.
-    """
 
     for i in sorted_whole_segment_ids:
         if i in train_segment_ids:
@@ -245,4 +237,3 @@ def save_processed_data(output_dir: Path, train_loader, val_loader, scaler, val_
             pickle.dump(anomaly_types, f)
     with open(output_dir / "X_calib_t_for_reader.pkl", "wb") as f:
             pickle.dump(X_calib_t_for_reader, f)
-    
