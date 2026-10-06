@@ -1,59 +1,36 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
+## Project structure
 
-This repository prepares Formula 1 telemetry for anomaly testing and replays
-it as synthetic CAN traffic. Keep each pipeline role isolated:
+- `extract.py` and `f1_can/telemetry.py` download and clean FastF1 race-driver telemetry.
+- `prepare.py` and `f1_can/prepareData.py` create deterministic segment splits, PyTorch loaders, raw Pi windows, scaler metadata, and the calibration artifact.
+- `train.py`, `model_integration/Autoencoder.py`, and `export.py` train in Google Colab and export checked FP32 ONNX.
+- `quantise.py` produces static QDQ INT8 ONNX from training-only calibration windows.
+- `edge_ids_runner.py` is the Pi runner: it scales raw windows, derives the deployment threshold from validation data, then reports test detection count and latency.
 
-- `f1_can/telemetry.py` extracts and resamples FastF1 race-driver segments.
-- `f1_can/dataset.py` creates the normal/held-out window archives.
-- `f1_can/faults.py` injects deterministic test-only anomalies.
-- `f1_can/can_frames.py` and `f1_can/replay.py` implement the fixed CAN layout
-  and SocketCAN sender.
-- `model_integration/` contains copy-in files for the external autoencoder;
-  `tests/` contains offline unit tests.
+Generated telemetry, pickles, models, thresholds, Colab bundles, and caches belong in `data/`, `models/`, `output/`, or `.cache/`; do not commit them.
 
-Generated datasets, model outputs, and FastF1 caches belong under `data/`,
-`output/`, or `.cache/` and must not be committed. Keep labels out of CAN
-payloads and model feature tensors.
-
-## Build, Test, and Development Commands
-
-Install the pipeline dependencies before extraction or replay.
+## Commands
 
 ```bash
 python3 -m pip install -r requirements.txt
-python3 -m unittest discover -v
-python3 build_fastf1_dataset.py --output-dir data/fastf1_2024
-python3 -m f1_can.replay --archive data/fastf1_2024/test_windows.npz --dry-run
+python3 -m pytest
+make extract
+make prepare
+make colab-bundle
+make export
 ```
 
-The test command is hardware/network independent. Dataset generation downloads
-and caches FastF1 data; use a fixed `--seed` when comparing outputs.
+Never run `make train` on this laptop. Upload the Colab bundle to Google Drive and follow `COLAB.md` for GPU training, ONNX export, and static quantization. Use `requirements-pi.txt` only on the 64-bit Raspberry Pi.
 
-## Coding Style & Naming Conventions
+## Data and model invariants
 
-Use Python 3 with four-space indentation, type hints for public functions, and
-standard-library modules where practical. Follow PEP 8 naming: `snake_case` for
-functions, variables, modules, and JSON fields; `UPPER_CASE` for CAN IDs and
-other constants. Keep CLI parsing inside `main()` and protect it with
-`if __name__ == "__main__":`.
+- Feature order is always `RPM`, `Speed`, `Throttle`, `nGear`, `DeltaTime`; model input is `[batch, 5, 20]`.
+- Fit `StandardScaler` only on training segments. Colab loaders are scaled; Pi validation and test artifacts are raw and must be scaled in `edge_ids_runner.py`.
+- Preserve `preparation_manifest.json`; it fixes split IDs, source hash, seed, and calibration segment. Validation and test segments must never be used for training or calibration.
+- The deployment threshold is the 99th percentile of clean validation MSE from the quantized model on the Pi. Bind threshold records to model and preprocessing hashes.
+- Synthetic labels and fault tags remain outside model inputs and are not loaded by the Pi test command.
 
-Document signal units, bounds, scaling ownership, and byte order beside an
-encoding definition. The `0x100` payload is synthetic unless a DBC explicitly
-replaces it; do not present it as a vehicle-specific CAN definition.
+## Tests and style
 
-## Testing Guidelines
-
-Write `unittest` tests named `test_<behavior>` in `tests/test_*.py`. Cover
-deterministic splits/faults, archive shapes, scaler ownership, payload
-round-trips, and invalid values. Use temporary data or fixtures; do not require
-FastF1 downloads, SocketCAN, or a GPU in the unit suite.
-
-## Commit & Pull Request Guidelines
-
-The existing history uses descriptive, sentence-style commit subjects. Use a
-concise imperative subject, for example: `Add gear fault injection`. Keep each
-commit focused. Pull requests should explain dataset/schema or CAN-ID changes,
-list validation commands, and include sample output when payload encoding
-changes.
+Use Python 3, four-space indentation, type hints for public functions, and pytest files named `tests/test_*.py`. Unit tests must use temporary/synthetic data and require neither FastF1 downloads, Colab, nor Pi hardware. Cover split persistence, scaling ownership, raw artifact shapes, fault determinism, quantizer feeds, and runner threshold compatibility.

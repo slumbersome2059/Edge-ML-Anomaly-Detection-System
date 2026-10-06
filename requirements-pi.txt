@@ -1,0 +1,3 @@
+# 64-bit Raspberry Pi OS inference environment; no PyTorch, pandas, or scikit-learn.
+numpy==2.5.2
+onnxruntime==1.29.0
