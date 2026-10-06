@@ -2,7 +2,7 @@ import argparse
 from pathlib import Path
 import torch
 from model_integration.Autoencoder import ConvAutoencoder1D
-from f1_can.prepareData import WINDOW_SIZE, NUM_FEATURES
+from constants import WINDOW_SIZE, NUM_FEATURES
 
 
 def export_torch_to_onnx(model: torch.nn.Module, output_path: str = "models/conv_autoencoder_ids.onnx", in_channels: int = 5):
@@ -36,7 +36,7 @@ def main():
     model = ConvAutoencoder1D(in_channels=NUM_FEATURES)
     model.load_state_dict(torch.load(args.model_path, weights_only=True))
 
-    export_torch_to_onnx(model, str(args.output_onnx), in_channels=args.in_channels)
+    export_torch_to_onnx(model, str(args.output_onnx), in_channels=NUM_FEATURES)
 
 
 if __name__ == "__main__":

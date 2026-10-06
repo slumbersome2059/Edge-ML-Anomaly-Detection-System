@@ -9,7 +9,8 @@ from sklearn.preprocessing import StandardScaler
 # Import your functions and constants from the source modules
 import f1_can
 # FIXED: Updated import to generate_scaled_evaluation_dataset
-from f1_can.prepareData import prepare_datasets, inject_fault, WINDOW_SIZE, generate_scaled_evaluation_dataset
+from f1_can.prepareData import prepare_datasets, inject_fault, generate_scaled_evaluation_dataset
+from f1_can.prepareData import WINDOW_SIZE
 from f1_can.telemetry import _resample_car_data, keepRequiredColumns
 from f1_can.sensors import Sensors
 

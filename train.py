@@ -2,7 +2,7 @@ import argparse
 import pickle
 from pathlib import Path
 import torch
-from f1_can.prepareData import NUM_FEATURES
+from constants import NUM_FEATURES
 
 from model_integration.Autoencoder import ConvAutoencoder1D, train_autoencoder, calculate_anomaly_threshold
 

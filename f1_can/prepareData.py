@@ -8,8 +8,7 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from .sensors import Sensors
 
-from . import WINDOW_SIZE, BATCH_SIZE, STRIDE, PROCESSED_COLUMNS
-NUM_FEATURES = 5
+from constants import WINDOW_SIZE, BATCH_SIZE, STRIDE, PROCESSED_COLUMNS, NUM_FEATURES, FEATURE_COLUMNS
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.manual_seed(42)
@@ -18,15 +17,20 @@ import time
 start_time = time.time()
 
 def give_first_train_segment_id(sorted_whole_segment_ids: list, train_segment_ids: list):
-
+    """
+    I wanted to randomly choose training data, validation data and test data because 
+    I didn't want to affect the validation or test data chosen. To assist with the calibration, 
+    I thought I would choose the race that finished first out of the training drivers 
+    to capture the extremes.
+    """
     for i in sorted_whole_segment_ids:
         if i in train_segment_ids:
             return i 
-def extract_windows(dframe, feature_cols):
+def extract_windows(dframe):
     windows = []
     for _, group in dframe.groupby("segment_id"):#groupby is usually used with something that brings data to one cell
         #if not what it does is give you an iterable with the original dframe split by segment_id so you end up having many dframes 
-        arr = group[feature_cols].to_numpy(dtype=np.float32)
+        arr = group[FEATURE_COLUMNS].to_numpy(dtype=np.float32)
         n_rows = len(group)
         segment_windows = [
             arr[start : start + WINDOW_SIZE]
@@ -34,10 +38,10 @@ def extract_windows(dframe, feature_cols):
         ]
         windows.extend(segment_windows)
     return windows
-def setup_sensors(feature_cols):
+def setup_sensors():
     for sensor in Sensors.ALL_SENSORS:
         try:
-            sensor.index = feature_cols.index(sensor.name)
+            sensor.index = FEATURE_COLUMNS.index(sensor.name)
         except ValueError:
             raise RuntimeError("The columns of the dataframe to be fed into the " \
             "training model does not match the ones present in the sensors class ")
@@ -74,18 +78,15 @@ def prepare_datasets(csv_path: str, sorted_segment_ids):
 
     calib_df = df[df["segment_id"] == give_first_train_segment_id(sorted_segment_ids, train_segs)].copy()
 
-    feature_cols = [c for c in df.columns if c != "segment_id"]
-
     validate_dframe_cols(df)
 
-    setup_sensors(feature_cols)
-    NUM_FEATURES = len(feature_cols)#USED IN OTHER FILE
+    setup_sensors()
 
     print("--- %s seconds ---" % (time.time() - start_time))
 
     # 3. Fit Scaler ONLY on training data to prevent leakage
     scaler = StandardScaler()
-    scaler.fit(train_df[feature_cols].values)
+    scaler.fit(train_df[FEATURE_COLUMNS].values)
     #this calcualates mean and SD, later used in transform to scale things
     #The scaling/transformation does is z = x - \mu/\sigma, the z score stuff
     #It is really important you fit on training data, fitting on the other data means 
@@ -93,17 +94,17 @@ def prepare_datasets(csv_path: str, sorted_segment_ids):
 
     # Transform DataFrames for training and thresholding
     for dframe in [train_df, val_df, calib_df]:
-        dframe[feature_cols] = scaler.transform(dframe[feature_cols].values)#this is fine the columns aren't also added to nparray
+        dframe[FEATURE_COLUMNS] = scaler.transform(dframe[FEATURE_COLUMNS].values)#this is fine the columns aren't also added to nparray
 
     print("--- %s seconds ---" % (time.time() - start_time))
 
-    X_train = extract_windows(train_df, feature_cols)
-    X_val = extract_windows(val_df, feature_cols)
-    X_calib = extract_windows(calib_df, feature_cols)
+    X_train = extract_windows(train_df)
+    X_val = extract_windows(val_df)
+    X_calib = extract_windows(calib_df)
 
     print("--- %s seconds ---" % (time.time() - start_time))
 
-    X_test, anomalies, anomaly_types = generate_scaled_evaluation_dataset(test_df, scaler, feature_cols)
+    X_test, anomalies, anomaly_types = generate_scaled_evaluation_dataset(test_df, scaler)
 
     print("--- %s seconds ---" % (time.time() - start_time))
     # Currently the shape is (1, Window_Size, Channels/Features)
@@ -183,7 +184,7 @@ def inject_fault(raw_window: np.ndarray, fault_type: str, rng: np.random.Generat
 
 
 def generate_scaled_evaluation_dataset(#gives a scaled, UNtransposed 3D array from the dataframe
-    test_df: pd.DataFrame, scaler, feature_cols, anomaly_ratio: float = 0.5, seed: int = 42
+    test_df: pd.DataFrame, scaler, anomaly_ratio: float = 0.5, seed: int = 42
 ):
     """Generates test windows with an equal mix of clean data and injected fault types."""
     rng = np.random.default_rng(seed)
@@ -192,7 +193,7 @@ def generate_scaled_evaluation_dataset(#gives a scaled, UNtransposed 3D array fr
     fault_tags = []
     print(test_df.columns)
     
-    test_windows = extract_windows(test_df, feature_cols) #in test_windows each window is a dataframe
+    test_windows = extract_windows(test_df) #in test_windows each window is a dataframe
     print(len(test_windows))
     randNums = rng.random((len(test_windows)))
     for (randNum, window) in zip(randNums, test_windows):

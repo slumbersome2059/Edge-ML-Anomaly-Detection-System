@@ -10,27 +10,27 @@ SORTED_SEGMENT_IDS = data/fastf1_2024/sorted_segment_ids.pkl
 
 
 # 1. Extraction: Download telemetry and write CSV
-$(RAW_DATA): extract.py f1_can/telemetry.py
+$(RAW_DATA): extract.py f1_can/telemetry.py constants.py f1_can/sensors.py
 	python3 extract.py --output-csv $(RAW_DATA)
 
 extract: $(RAW_DATA)
 
 # 2. Preparation: Transform CSV and output pickle files
-$(STAMP_FILE): $(RAW_DATA) prepare.py f1_can/prepareData.py
+$(STAMP_FILE): $(RAW_DATA) prepare.py f1_can/prepareData.py constants.py f1_can/sensors.py
 	python3 prepare.py --raw-csv $(RAW_DATA) --output-dir $(PROCESSED_DIR)
 	touch $(STAMP_FILE)
 
 prepare: $(STAMP_FILE)
 
 # 3. Training: Train autoencoder using processed training loader
-$(MODEL_WEIGHTS): $(STAMP_FILE) train.py model_integration/Autoencoder.py
-	python3 train.py --processed-dir $(PROCESSED_DIR) --model-output $(MODEL_WEIGHTS)
+#$(MODEL_WEIGHTS): $(STAMP_FILE) train.py model_integration/Autoencoder.py constants.py
+	#python3 train.py --processed-dir $(PROCESSED_DIR) --model-output $(MODEL_WEIGHTS)
 
-train: $(MODEL_WEIGHTS)
+#train: $(MODEL_WEIGHTS)
 	
 
 # 5. Export: Convert PyTorch model weights to ONNX format
-$(ONNX_MODEL): $(MODEL_WEIGHTS) export.py
+$(ONNX_MODEL): $(MODEL_WEIGHTS) export.py constants.py model_integration/Autoencoder.py
 	python3 export.py --model-path $(MODEL_WEIGHTS) --output-onnx $(ONNX_MODEL)
 
 exportCommand: $(ONNX_MODEL)
