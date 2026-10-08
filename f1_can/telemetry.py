@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from .sensors import Sensors
+from constants import WINDOW_SIZE
 import pickle
 
 
@@ -18,7 +19,7 @@ def _resample_car_data(car_data):
     it removes them if any cell in that row contains a missing value(things like np.na)
     - Here we only consider if it has missing values in the columns given by subset but if not all columns considered
     """
-    frame = frame[(frame["Throttle"] <= 100) & (frame["Throttle"] >= 0) & (frame["nGear"] >= 0)]#throttle is a percentage
+    frame = frame[(frame["Throttle"] <= 100) & (frame["Throttle"] >= 0) & (frame["nGear"] >= 0) & (frame["nGear"] <= 8)]#throttle is a percentage
     """
     - The (frame["Throttle"] <= 100) generates a boolean vector and the &s work column wise 
     and at the end frame contains all the rows which have a 1 in them in the 
@@ -68,6 +69,7 @@ def extract_2024_races(output: Path, cache_dir: Path, *, year: int = 2024,
     completed = 0#number of completed sessions
     finish = False
     sorted_segment_ids = []#this will hold the segment_ids sorted by the finishing position in the race
+    
     for _, event in schedule.iterrows():
         try:
             round_number = int(event["RoundNumber"])
@@ -95,7 +97,7 @@ def extract_2024_races(output: Path, cache_dir: Path, *, year: int = 2024,
             except Exception as exc:
                 print(f"Skipping {event['EventName']} driver {driver}: {exc}")
                 continue
-            if len(segment) < 12:
+            if len(segment) < WINDOW_SIZE:
                 continue
             segment_id = f"{year}-R{round_number:02d}-{driver}"
             sorted_segment_ids.append(segment_id)

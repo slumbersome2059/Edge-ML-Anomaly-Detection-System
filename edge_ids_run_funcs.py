@@ -2,6 +2,7 @@ import time
 import pickle
 import argparse
 from pathlib import Path
+from typing import Any
 import numpy as np
 
 import onnxruntime as ort
@@ -22,7 +23,7 @@ class EdgeIDSInferenceEngine:
         opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL #whether operators in the graph get executed sequentially or in parallel
         #For models where there are many branches you would want to execute in parallel
         
-        self.session = ort.InferenceSession(model_path, opts, providers=["CPUExecutionProvider"])
+        self.session = ort.InferenceSession(str(model_path), opts, providers=["CPUExecutionProvider"])
         #InferenceSession is used to load and run the model, it also does other things like optimise the graph
         #Provider contains code to run operators for specific targets like (CPU, GPU)
         inputs, outputs = self.session.get_inputs(), self.session.get_outputs()
@@ -32,10 +33,10 @@ class EdgeIDSInferenceEngine:
             raise RuntimeError("model must have exactly one reconstruction output")
         self.input_name, self.output_name = inputs[0].name, outputs[0].name
 
-    def predict_window(self, scaled_window: np.ndarray) -> tuple[float, float, bool]:
+    def predict_window(self, scaled_window: np.ndarray) -> tuple[float, float]:
         """
         Input shape: (WINDOW_SIZE, 5)
-        Returns: (MSE reconstruction loss, inference latency in ms, is_anomaly flag)
+        Returns: (MSE reconstruction loss, inference latency in ms)
         """
         if scaled_window.shape != (20, 5) or not np.all(np.isfinite(scaled_window)):
             raise ValueError("scaled window must be finite with shape [20, 5]")
@@ -51,7 +52,7 @@ class EdgeIDSInferenceEngine:
 
         return mse, latency_ms
 
-def evaluate_windows(raw_windows: list, engine: EdgeIDSInferenceEngine, scaler_vals: dict[str, Any], *, warmup_windows: int = 10) -> tuple[np.ndarray, np.ndarray]:
+def evaluate_windows(raw_windows: np.ndarray, engine: EdgeIDSInferenceEngine, scaler_vals: dict[str, np.ndarray], *, warmup_windows: int = 10) -> tuple[np.ndarray, np.ndarray]:
     """Scale each saved raw window immediately before batch-one inference."""
     errors, latencies = np.empty(len(raw_windows), dtype=np.float64), []
     for index, raw_window in enumerate(raw_windows):
@@ -62,15 +63,32 @@ def evaluate_windows(raw_windows: list, engine: EdgeIDSInferenceEngine, scaler_v
     return errors, np.asarray(latencies, dtype=np.float64)
 
 def latency_summary(latencies: np.ndarray) -> dict[str, float]:
-    return {"sum_ms": float(np.mean(latencies)),"mean_ms": float(np.mean(latencies)), "median_ms": float(np.median(latencies)),
+    if len(latencies) == 0:
+        return {"mean_ms": 0.0, "median_ms": 0.0, "p95_ms": 0.0, "p99_ms": 0.0, "max_ms": 0.0}
+    return {"mean_ms": float(np.mean(latencies)), "median_ms": float(np.median(latencies)),
             "p95_ms": float(np.percentile(latencies, 95)), "p99_ms": float(np.percentile(latencies, 99)), "max_ms": float(np.max(latencies))}
 
 def load_scaler_vals(path: Path) -> dict[str, Any]:
     with path.open("rb") as source:
         config = pickle.load(source)
+    if not isinstance(config, dict):
+        raise ValueError("scaler values must be stored as a dictionary")
+    mean = np.asarray(config.get("mean"), dtype=np.float32)
+    scale = np.asarray(config.get("scale"), dtype=np.float32)
+    if mean.shape != (len(FEATURE_COLUMNS),) or scale.shape != (len(FEATURE_COLUMNS),):
+        raise ValueError("scaler mean and scale must contain one value per feature")
+    if not np.all(np.isfinite(mean)) or not np.all(np.isfinite(scale)) or np.any(scale <= 0):
+        raise ValueError("scaler mean and scale must be finite, with positive scales")
+    config["mean"] = mean
+    config["scale"] = scale
     return config
 
-def load_raw_windows(path: Path) -> list:
+def load_raw_windows(path: Path) -> np.ndarray:
     with path.open("rb") as source:
         windows = pickle.load(source)
+    windows = np.asarray(windows, dtype=np.float32)
+    if windows.ndim != 3 or windows.shape[1:] != (WINDOW_SIZE, len(FEATURE_COLUMNS)):
+        raise ValueError("windows must have shape [number_of_windows, window_size, num_features]")
+    if len(windows) == 0 or not np.all(np.isfinite(windows)):#isfinite tests elementwise for whether an element is infinity or not
+        raise ValueError("windows must be non-empty and finite")
     return windows

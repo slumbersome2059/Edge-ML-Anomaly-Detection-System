@@ -8,7 +8,7 @@ ONNX_MODEL = models/conv_autoencoder_ids.onnx
 QUANTISED_ONNX_MODEL = models/conv_autoencoder_ids_quantized.onnx
 SORTED_SEGMENT_IDS = data/fastf1_2024/sorted_segment_ids.pkl
 
-.PHONY: extract prepare train evaluate export clean
+.PHONY: extract prepare train evaluate export clean quantise
 
 
 # 1. Extraction: Download telemetry and write CSV
@@ -25,7 +25,7 @@ $(STAMP_FILE): $(RAW_DATA) prepare.py f1_can/prepareData.py constants.py f1_can/
 prepare: $(STAMP_FILE)
 
 # 3. Training: Train autoencoder using processed training loader
-#$(MODEL_WEIGHTS): $(STAMP_FILE) train.py model_integration/Autoencoder.py constants.py
+#$(MODEL_WEIGHTS): $(STAMP_FILE) train.py model_integration/Autoencoder.py constants.py 
 	#python3 train.py --processed-dir $(PROCESSED_DIR) --model-output $(MODEL_WEIGHTS)
 
 #train: $(MODEL_WEIGHTS)
@@ -35,10 +35,11 @@ prepare: $(STAMP_FILE)
 $(ONNX_MODEL): $(MODEL_WEIGHTS) export.py constants.py model_integration/Autoencoder.py
 	python3 export.py --model-path $(MODEL_WEIGHTS) --output-onnx $(ONNX_MODEL)
 
+
 exportCommand: $(ONNX_MODEL)
 
 # 6. Quantisation
-$(QUANTISED_ONNX_MODEL): quantise.py constants.py $(ONNX_MODEL)
+$(QUANTISED_ONNX_MODEL): quantise.py constants.py $(ONNX_MODEL) $(CALIB_DATA)
 	python3 quantise.py --input-onnx $(ONNX_MODEL) --calibration $(CALIB_DATA) --output-onnx $(QUANTISED_ONNX_MODEL)
 
 quantise: $(QUANTISED_ONNX_MODEL)

@@ -1,4 +1,11 @@
-from edge_ids_run_funcs import *
+import argparse
+import pickle
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+from edge_ids_run_funcs import EdgeIDSInferenceEngine, evaluate_windows, latency_summary, load_raw_windows, load_scaler_vals
 def validate(model: Path, scaler_vals_path: Path, windows_path: Path, threshold_output: Path) -> dict[str, Any]:
     errors, latencies = evaluate_windows(load_raw_windows(windows_path), EdgeIDSInferenceEngine(model), load_scaler_vals(scaler_vals_path))
     record = {"percentile": 99.0, "threshold": float(np.percentile(errors, 99)),
@@ -23,3 +30,6 @@ def main() -> None:
     for key in result:
         print(key + " " + str(result[key]) + "\n")
 
+
+if __name__ == "__main__":
+    main()

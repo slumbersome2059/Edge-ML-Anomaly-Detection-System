@@ -34,7 +34,7 @@ def main():
     args = parser.parse_args()
 
     model = ConvAutoencoder1D(in_channels=NUM_FEATURES)
-    model.load_state_dict(torch.load(args.model_path, weights_only=True))
+    model.load_state_dict(torch.load(args.model_path, map_location="cpu", weights_only=True))
 
     export_torch_to_onnx(model, str(args.output_onnx), in_channels=NUM_FEATURES)
 

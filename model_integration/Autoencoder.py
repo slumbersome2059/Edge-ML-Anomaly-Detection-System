@@ -13,9 +13,9 @@ np.random.seed(42)
 class ConvAutoencoder1D(nn.Module):
     """Ultra-lightweight 1D Conv Autoencoder (<1,200 parameters).
 
-    Input Shape:  (Batch, 4, 20)
+    Input Shape:  (Batch, 5, 20)
     Bottleneck:   (Batch, 8, 20)
-    Output Shape: (Batch, 4, 20)
+    Output Shape: (Batch, 5, 20)
     """
 
     def __init__(self, in_channels: int = 5):
@@ -52,7 +52,7 @@ class ConvAutoencoder1D(nn.Module):
         self.decoder = nn.Sequential(
             nn.Conv1d(8, 16, kernel_size=3, padding=1),  # (B, 16, 20)
             nn.ReLU(),
-            nn.Conv1d(16, in_channels, kernel_size=3, padding=1),  # (B, 4, 20)
+            nn.Conv1d(16, in_channels, kernel_size=3, padding=1),  # (B, 5, 20)
         )
 
     def forward(self, x):

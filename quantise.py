@@ -1,6 +1,4 @@
-import onnxruntime.quantization as quant
 import argparse
-import json
 import pickle
 import onnxruntime.quantization as quant
 import numpy as np
@@ -13,7 +11,7 @@ class TelemetryDataReader(quant.CalibrationDataReader):
         - X_calib_t_for_reader is (N, 1, 5, 20) because the quantize needs an extra array wrapped around each window 
         - This calibration step is used to calculate the quantisation parameters 
         """
-        if X_calib_t_for_reader.ndim != 4 or X_calib_t_for_reader.shape[1:] != (1, NUM_FEATURES, WINDOW_SIZE):
+        if len(X_calib_t_for_reader) == 0 or X_calib_t_for_reader.ndim != 4 or X_calib_t_for_reader.shape[1:] != (1, NUM_FEATURES, WINDOW_SIZE):
             raise ValueError("calibration data must have shape [N, 1, num_features, window_size]")
         self.data_iter = iter(X_calib_t_for_reader)
     def get_next(self):
@@ -21,22 +19,23 @@ class TelemetryDataReader(quant.CalibrationDataReader):
         return None if sample is None else {"input_telemetry": sample}
 
 def quantize_onnx_model(
-    calib_data: np.array,
-    input_onnx_path: Path = "models/conv_autoencoder_ids.onnx",
-    output_onnx_path: Path = "models/conv_autoencoder_ids_quantized.onnx",
+    calib_data: np.ndarray,
+    input_onnx_path: Path = Path("models/conv_autoencoder_ids.onnx"),
+    output_onnx_path: Path = Path("models/conv_autoencoder_ids_quantized.onnx"),
     
 ):
-    """Applies static INT8 quantization using calibration samples from test.csv.
+    """Applies static INT8 quantization using training-only calibration samples.
 
     - calib_data is (N, 1, 5, 20) because the quantize needs an extra array wrapped around each window 
     - This calibration step is used to calculate the quantisation parameters 
     
     """
+    output_onnx_path.parent.mkdir(parents=True, exist_ok=True)
     data_reader = TelemetryDataReader(calib_data)
 
     quant.quantize_static(
-        model_input=input_onnx_path,
-        model_output=output_onnx_path,
+        model_input=str(input_onnx_path),
+        model_output=str(output_onnx_path),
         calibration_data_reader=data_reader,
         quant_format=quant.QuantFormat.QDQ,
         per_channel=False,

@@ -40,7 +40,7 @@ It is also an example of how I work as an **AI-native intern**. I naturally use 
 
 ```text
 .
-├── main.py                       # Extract, prepare, train, and export workflow
+├── Makefile                      # Extract, prepare, export, and quantise workflow
 ├── f1_can/
 │   ├── telemetry.py              # FastF1 extraction and telemetry validation
 │   ├── prepareData.py            # Splits, scaling, windows, and fault injection
@@ -68,32 +68,35 @@ python3 -m pip install -r requirements.txt
 Run from the repository root. The first run downloads FastF1 sessions and writes the resulting telemetry CSV to `data/fastf1_2024/`; FastF1 downloads are cached in `.cache/fastf1/`.
 
 ```bash
-python3 main.py
+make prepare
 ```
+
+This extracts missing telemetry and creates deterministic training, validation, test, scaler, and calibration artifacts. It does not train a model.
 
 For a short extraction smoke test, limit the number of race sessions:
 
 ```bash
-python3 main.py --max-sessions 2
+python3 extract.py --max-sessions 2
 ```
 
 To reuse a telemetry CSV instead of downloading data again:
 
 ```bash
-python3 main.py --raw-csv path/to/fastf1_telemetry.csv
+python3 prepare.py --raw-csv path/to/fastf1_telemetry.csv
 ```
 
-The workflow trains for up to 20 epochs, applying early stopping when validation loss stops improving, and saves the trained weights as `autoencoder_ids.pth`.
+Train on Colab from the generated `data/processed/train_loader.pkl` and `val_loader.pkl`; do not run the training target locally.
 
 ### 3. Export an existing model
 
 Once weights are available, request the export path:
 
 ```bash
-python3 main.py --raw-csv path/to/fastf1_telemetry.csv --trained-model autoencoder_ids.pth
+python3 export.py --model-path models/autoencoder_ids.pth --output-onnx models/conv_autoencoder_ids.onnx
+python3 quantise.py --input-onnx models/conv_autoencoder_ids.onnx --calibration data/processed/X_calib_t_for_reader.pkl --output-onnx models/conv_autoencoder_ids_quantized.onnx
 ```
 
-This produces `conv_autoencoder_ids.onnx`, which is suitable for an ONNX Runtime-based inference experiment on constrained hardware.
+This produces FP32 and static-QDQ INT8 ONNX models suitable for an ONNX Runtime-based inference experiment on constrained hardware.
 
 ### 4. Run tests
 
