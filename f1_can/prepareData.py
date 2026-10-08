@@ -88,9 +88,11 @@ def prepare_datasets(csv_path: str, sorted_segment_ids):
     scaler = StandardScaler()
     scaler.fit(train_df[FEATURE_COLUMNS].values)
     #this calcualates mean and SD, later used in transform to scale things
-    #The scaling/transformation does is z = x - \mu/\sigma, the z score stuff
+    #The scaling/transformation does is z = x - \mu/\sigma, the z score stuff(look at edge ids runner for more detail on this)
     #It is really important you fit on training data, fitting on the other data means 
     #you gain info about something that is meant to be unknown(test and val are unseen data)
+
+    X_val_unscaled = extract_windows(val_df)
 
     # Transform DataFrames for training and thresholding
     for dframe in [train_df, val_df, calib_df]:
@@ -104,13 +106,13 @@ def prepare_datasets(csv_path: str, sorted_segment_ids):
 
     print("--- %s seconds ---" % (time.time() - start_time))
 
-    X_test, anomalies, anomaly_types = generate_scaled_evaluation_dataset(test_df, scaler)
+    X_test_unscaled, anomalies, anomaly_types = generate_raw_evaluation_dataset(test_df)
 
     print("--- %s seconds ---" % (time.time() - start_time))
     # Currently the shape is (1, Window_Size, Channels/Features)
     # Convert to PyTorch Conv1D shape: (Batch, Channels/Features, Window_Size)
     X_train_t = torch.tensor(np.array(X_train)).transpose(1, 2)
-    X_val_t = torch.tensor(np.array(X_train)).transpose(1, 2)
+    X_val_t = torch.tensor(np.array(X_val)).transpose(1, 2)
     X_calib_t = np.transpose(np.array(X_calib), (0, 2, 1))
     X_calib_t_for_reader = np.expand_dims(X_calib_t, 1)
 
@@ -138,8 +140,9 @@ def prepare_datasets(csv_path: str, sorted_segment_ids):
     - For the next epoch, you should shuffle the batches, using DataLoader has functionality to do this
     """
     # the shuffle is saying reshuffle at the end of every epoch
+    scaler_vals = {"mean":scaler.mean_, "scale":scaler.scale_}
 
-    return train_loader, val_loader, scaler, X_val, X_test, anomalies, anomaly_types, X_calib_t_for_reader
+    return train_loader, val_loader, scaler_vals, X_val_unscaled, X_test_unscaled, anomalies, anomaly_types, X_calib_t_for_reader
 
 
 def inject_fault(raw_window: np.ndarray, fault_type: str, rng: np.random.Generator) -> pd.DataFrame:
@@ -155,13 +158,11 @@ def inject_fault(raw_window: np.ndarray, fault_type: str, rng: np.random.Generat
     slice_idx = slice(start, start + randSize)
     if fault_type == Sensors.RPM.fault.value:
         sensor = Sensors.RPM
-        print(result[slice_idx, sensor.index])
         result[slice_idx, sensor.index] = np.clip(
             result[slice_idx, sensor.index] * rng.uniform(1.45, 1.9),
             0,
             sensor.max_val,
         )
-        print(result[slice_idx, sensor.index])
     elif fault_type == Sensors.SPEED.fault.value:
         sensor = Sensors.SPEED
         result[slice_idx, sensor.index] = np.clip(
@@ -179,12 +180,14 @@ def inject_fault(raw_window: np.ndarray, fault_type: str, rng: np.random.Generat
             0,
             sensor.max_val,
         )
+    else:
+        raise ValueError(f"unknown fault type: {fault_type}")
 
     return result
 
 
-def generate_scaled_evaluation_dataset(#gives a scaled, UNtransposed 3D array from the dataframe
-    test_df: pd.DataFrame, scaler, anomaly_ratio: float = 0.5, seed: int = 42
+def generate_raw_evaluation_dataset(#gives a scaled, UNtransposed 3D array from the dataframe
+    test_df: pd.DataFrame, anomaly_ratio: float = 0.5, seed: int = 42
 ):
     """Generates test windows with an equal mix of clean data and injected fault types."""
     rng = np.random.default_rng(seed)
@@ -201,15 +204,14 @@ def generate_scaled_evaluation_dataset(#gives a scaled, UNtransposed 3D array fr
         if is_anomaly:
             fault = rng.choice(Sensors.FAULT_TYPES)
             fault_str = fault.value
-            modified_window = inject_fault(window, fault, rng)
+            modified_window = inject_fault(window, fault_str, rng)
             label = 1
         else:
             fault_str = "clean"
             modified_window = window.copy()
             label = 0
 
-        scaled_window = scaler.transform(np.array(modified_window))
-        processed_windows.append(scaled_window)
+        processed_windows.append(modified_window)
         labels.append(label)
         fault_tags.append(fault_str)
 
@@ -219,19 +221,19 @@ def generate_scaled_evaluation_dataset(#gives a scaled, UNtransposed 3D array fr
     return X_test, y_test, fault_tags
 
 
-def save_processed_data(output_dir: Path, train_loader, val_loader, scaler, val_scaled_windows, test_scaled_windows, anomalies, anomaly_types, X_calib_t_for_reader):
+def save_processed_data(output_dir: Path, train_loader, val_loader, scaler_vals, val_unscaled_windows, test_unscaled_windows, anomalies, anomaly_types, X_calib_t_for_reader):
     """Serializes dataset splits and scaler into pickle files."""
     output_dir.mkdir(parents=True, exist_ok=True)
     with open(output_dir / "train_loader.pkl", "wb") as f:
         pickle.dump(train_loader, f)
     with open(output_dir / "val_loader.pkl", "wb") as f:
         pickle.dump(val_loader, f)
-    with open(output_dir / "scaler.pkl", "wb") as f:
-        pickle.dump(scaler, f)
-    with open(output_dir / "val_scaled_windows.pkl", "wb") as f:
-        pickle.dump(val_scaled_windows, f)
-    with open(output_dir / "test_scaled_windows.pkl", "wb") as f:
-        pickle.dump(test_scaled_windows, f)
+    with open(output_dir / "scaler_vals.pkl", "wb") as f:
+        pickle.dump(scaler_vals, f)
+    with open(output_dir / "val_unscaled_windows.pkl", "wb") as f:
+        pickle.dump(val_unscaled_windows, f)
+    with open(output_dir / "test_unscaled_windows.pkl", "wb") as f:
+        pickle.dump(test_unscaled_windows, f)
     with open(output_dir / "anomalies.pkl", "wb") as f:
             pickle.dump(anomalies, f)
     with open(output_dir / "anomaly_types.pkl", "wb") as f:

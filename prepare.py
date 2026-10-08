@@ -16,10 +16,10 @@ def main():
     
 
     print(f"Processing raw CSV: '{args.raw_csv}'...")
-    train_loader, val_loader, scaler, val_scaled_windows, test_scaled_windows, anomalies, anomaly_types, X_calib_t_for_reader = prepare_datasets(str(args.raw_csv), sorted_segment_ids)
+    train_loader, val_loader, scaler_vals, val_unscaled_windows, test_unscaled_windows, anomalies, anomaly_types, X_calib_t_for_reader = prepare_datasets(str(args.raw_csv), sorted_segment_ids)
 
     print(f"Saving processed pickle artifacts to '{args.output_dir}'...")
-    save_processed_data(args.output_dir, train_loader, val_loader, scaler, val_scaled_windows, test_scaled_windows, anomalies, anomaly_types, X_calib_t_for_reader)
+    save_processed_data(args.output_dir, train_loader, val_loader, scaler_vals, val_unscaled_windows, test_unscaled_windows, anomalies, anomaly_types, X_calib_t_for_reader)
     print("Dataset preparation complete.")
 
 

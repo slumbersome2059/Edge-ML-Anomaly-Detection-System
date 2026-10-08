@@ -68,6 +68,7 @@ def compute_reconstruction_errors(
     
     DataTensor is a list of matrices(each matrices rows of features and columns of window index)
     """
+    model.to(device)
     model.eval()#setting to evaluation mode, basically saying no training happens and just evaluation
     with torch.no_grad():#disables gradient calculation
         inputs = data_tensor.to(device)#this is for transferring to GPU but I'm not using a GPU so this code is redundant and I think data_tensor will be assigned to inputs

@@ -2,8 +2,10 @@
 RAW_DATA = data/fastf1_2024/fastf1_telemetry.csv
 PROCESSED_DIR = data/processed
 STAMP_FILE = $(PROCESSED_DIR)/.stamp
+CALIB_DATA = $(PROCESSED_DIR)/X_calib_t_for_reader.pkl
 MODEL_WEIGHTS = models/autoencoder_ids.pth
 ONNX_MODEL = models/conv_autoencoder_ids.onnx
+QUANTISED_ONNX_MODEL = models/conv_autoencoder_ids_quantized.onnx
 SORTED_SEGMENT_IDS = data/fastf1_2024/sorted_segment_ids.pkl
 
 .PHONY: extract prepare train evaluate export clean
@@ -34,6 +36,12 @@ $(ONNX_MODEL): $(MODEL_WEIGHTS) export.py constants.py model_integration/Autoenc
 	python3 export.py --model-path $(MODEL_WEIGHTS) --output-onnx $(ONNX_MODEL)
 
 exportCommand: $(ONNX_MODEL)
+
+# 6. Quantisation
+$(QUANTISED_ONNX_MODEL): quantise.py constants.py $(ONNX_MODEL)
+	python3 quantise.py --input-onnx $(ONNX_MODEL) --calibration $(CALIB_DATA) --output-onnx $(QUANTISED_ONNX_MODEL)
+
+quantise: $(QUANTISED_ONNX_MODEL)
 
 # Clean up all generated data, models, and cache files
 clean:

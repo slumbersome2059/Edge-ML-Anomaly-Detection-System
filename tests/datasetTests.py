@@ -9,8 +9,8 @@ from sklearn.preprocessing import StandardScaler
 # Import your functions and constants from the source modules
 import f1_can
 # FIXED: Updated import to generate_scaled_evaluation_dataset
-from f1_can.prepareData import prepare_datasets, inject_fault, generate_scaled_evaluation_dataset
-from f1_can.prepareData import WINDOW_SIZE
+from f1_can.prepareData import prepare_datasets, inject_fault, generate_raw_evaluation_dataset
+from constants import WINDOW_SIZE
 from f1_can.telemetry import _resample_car_data, keepRequiredColumns
 from f1_can.sensors import Sensors
 
@@ -135,7 +135,7 @@ class TestPrepareDatasets:
         """Verifies DataLoader creation, batch shapes, and tensor transpositions."""
         
         # FIXED: Updated unpacking to match the 7 returned variables from prepareData.py
-        train_loader, X_val_loader, scaler, X_val, X_test, anomalies, anomaly_types, X_calib_t_for_reader = prepare_datasets(
+        train_loader, X_val_loader, scaler_vals, X_val, X_test, anomalies, anomaly_types, X_calib_t_for_reader = prepare_datasets(
             str(synthetic_telemetry_csv), [f"2024-R01-driver_{seg_idx}" for seg_idx in range(10)]
         )
 
@@ -186,19 +186,15 @@ class TestInjectFault:
         assert isinstance(modified, np.ndarray)
         assert modified.shape == sample_window.shape
 
-# FIXED: Renamed class and methods to match new generate_scaled_evaluation_dataset
-class TestGenerateScaledEvaluationDataset:
-    def test_generate_scaled_evaluation_dataset_output_shapes(self, test_df):
-        
-        scaler = StandardScaler()
+class TestGenerateRawEvaluationDataset:
+    def test_generate_raw_evaluation_dataset_output_shapes(self, test_df):
         
         # Drop string segment_id column just for the scaler fit (to simulate normal behavior)
         feature_cols = [c for c in test_df.columns if c != "segment_id"]
-        scaler.fit(np.array(test_df[feature_cols]))
         
         # FIXED: Calling the updated function
-        X_array, y_test, fault_tags = generate_scaled_evaluation_dataset(
-            test_df, scaler, feature_cols, anomaly_ratio=0.5, seed=42
+        X_array, y_test, fault_tags = generate_raw_evaluation_dataset(
+            test_df, anomaly_ratio=0.5, seed=42
         )
 
         # FIXED: Asserts updated because prepareData.py currently returns an untransposed numpy array
@@ -209,29 +205,11 @@ class TestGenerateScaledEvaluationDataset:
         assert X_array.shape == (num_windows, WINDOW_SIZE, len(feature_cols))
         assert y_test.shape == (num_windows,)
         assert len(fault_tags) == num_windows
-    def test_generate_scaled_evaluation_dataset_scaled_data(self, test_df):
-        #checks if data is scaled
-        scaler = StandardScaler()
-        
-        # Drop string segment_id column just for the scaler fit (to simulate normal behavior)
-        feature_cols = [c for c in test_df.columns if c != "segment_id"]
-        scaler.fit(np.array(test_df[feature_cols]))
-        
-        # FIXED: Calling the updated function
-        X_array, y_test, fault_tags = generate_scaled_evaluation_dataset(
-            test_df, scaler, feature_cols, anomaly_ratio=0.5, seed=42
-        )
-
-        # FIXED: Asserts updated because prepareData.py currently returns an untransposed numpy array
-        assert not np.array_equal(X_array[0], np.array(test_df.iloc[0:20, 0:5]))
-    def test_generate_scaled_evaluation_dataset_reproducibility(self, test_df):
+    def test_generate_raw_evaluation_dataset_reproducibility(self, test_df):
         """Verify that passing the same seed yields deterministic outputs."""
-        scaler = StandardScaler()
-        feature_cols = [c for c in test_df.columns if c != "segment_id"]
-        scaler.fit(np.array(test_df[feature_cols]))
         
-        X1, y1, tags1 = generate_scaled_evaluation_dataset(test_df, scaler, feature_cols, seed=123)
-        X2, y2, tags2 = generate_scaled_evaluation_dataset(test_df, scaler, feature_cols, seed=123)
+        X1, y1, tags1 = generate_raw_evaluation_dataset(test_df, seed=123)
+        X2, y2, tags2 = generate_raw_evaluation_dataset(test_df, seed=123)
 
         np.testing.assert_allclose(X1, X2)
         np.testing.assert_array_equal(y1, y2)

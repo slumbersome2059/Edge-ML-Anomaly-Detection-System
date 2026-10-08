@@ -28,7 +28,6 @@ def main():
     print(f"Starting training for {args.epochs} epochs...")
     train_autoencoder(model, train_loader, val_loader, epochs=args.epochs)
 
-
     args.model_output.parent.mkdir(parents=True, exist_ok=True)
     torch.save(model.state_dict(), args.model_output)
     print(f"Model state saved to '{args.model_output}'.")

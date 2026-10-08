@@ -1,22 +1,29 @@
 import onnxruntime.quantization as quant
-
+import argparse
+import json
+import pickle
 import onnxruntime.quantization as quant
 import numpy as np
+from pathlib import Path
+from constants import NUM_FEATURES, WINDOW_SIZE
 
 class TelemetryDataReader(quant.CalibrationDataReader):
-    def __init__(self, X_calib_t_for_reader:np.array):
+    def __init__(self, X_calib_t_for_reader:np.ndarray):
         """
         - X_calib_t_for_reader is (N, 1, 5, 20) because the quantize needs an extra array wrapped around each window 
         - This calibration step is used to calculate the quantisation parameters 
         """
+        if X_calib_t_for_reader.ndim != 4 or X_calib_t_for_reader.shape[1:] != (1, NUM_FEATURES, WINDOW_SIZE):
+            raise ValueError("calibration data must have shape [N, 1, num_features, window_size]")
         self.data_iter = iter(X_calib_t_for_reader)
     def get_next(self):
-        return next(self.data_iter, None)
+        sample = next(self.data_iter, None)
+        return None if sample is None else {"input_telemetry": sample}
 
 def quantize_onnx_model(
     calib_data: np.array,
-    input_onnx_path: str = "conv_autoencoder_ids.onnx",
-    output_onnx_path: str = "conv_autoencoder_ids_quantized.onnx",
+    input_onnx_path: Path = "models/conv_autoencoder_ids.onnx",
+    output_onnx_path: Path = "models/conv_autoencoder_ids_quantized.onnx",
     
 ):
     """Applies static INT8 quantization using calibration samples from test.csv.
@@ -44,3 +51,18 @@ def quantize_onnx_model(
         activation_type=quant.QuantType.QUInt8
     )
     print(f"Successfully quantized model -> '{output_onnx_path}'")
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Quantised model is generated in output-onnx path from an existing onnx model.")
+    parser.add_argument("--input-onnx", type=Path, default=Path("models/conv_autoencoder_ids.onnx"))
+    parser.add_argument("--calibration", type=Path, default=Path("data/processed/X_calib_t_for_reader.pkl"))
+    parser.add_argument("--output-onnx", type=Path, default=Path("models/conv_autoencoder_ids_quantized.onnx"))
+    args = parser.parse_args()
+    with args.calibration.open("rb") as source:
+        calibration_data = pickle.load(source)
+    quantize_onnx_model(calibration_data, args.input_onnx, args.output_onnx)
+    print(f"Quantized and checked ONNX model: '{args.output_onnx}'.")
+
+
+if __name__ == "__main__":
+    main()

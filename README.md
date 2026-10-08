@@ -128,3 +128,8 @@ These are deterministic test-time synthetic scenarios, not claims about a partic
 This is a learning and prototyping project. A production deployment would need vehicle-specific signal definitions, a validated threat model, data from the target platform, model calibration under real operating conditions, and hardware-in-the-loop testing.
 
 Generated telemetry, caches, checkpoints, and exported models are intentionally local artefacts and should not be committed.
+
+## Improvements
+
+- Use preprocessing in the quantisation step(there is info on quantisation page on onnxruntime) if you want to improve quantisation accuracy
+- Changing thread options in edge_ids_runner.py could affect performance
