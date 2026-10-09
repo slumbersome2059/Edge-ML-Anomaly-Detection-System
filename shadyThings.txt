@@ -1,2 +1,3 @@
 - Expanding the dimension to feed into the runtime session(line 45 on edge_ids_runner.py)
 - Input and output names of session thing its referring to the input_telemetry and the output name given in export.py
+- Changing thread options in edge_ids_runner.py could affect performance

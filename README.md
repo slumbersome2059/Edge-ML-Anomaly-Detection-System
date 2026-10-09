@@ -98,13 +98,68 @@ python3 quantise.py --input-onnx models/conv_autoencoder_ids.onnx --calibration 
 
 This produces FP32 and static-QDQ INT8 ONNX models suitable for an ONNX Runtime-based inference experiment on constrained hardware.
 
-### 4. Run tests
+### 4. Run model
 
 ```bash
-python3 -m pytest
+python3 edge_ids_validate.py   --model models/conv_autoencoder_ids_quantized.onnx   --scaler-vals data/processed/scaler_vals.pkl   --windows data/processed/val_unscaled_windows.pkl   --threshold-output output/int8_threshold.pkl
+
+python3 edge_ids_test.py   --model models/conv_autoencoder_ids_quantized.onnx   --scaler-vals data/processed/scaler_vals.pkl   --windows data/processed/test_unscaled_windows.pkl   --threshold output/int8_threshold.pkl --test-output output/int8_test_out.pkl
+
+python3 evaluate.py --test-output output/int8_test_out.pkl --y-true data/processed/anomalies.pkl --fault-tags data/processed/anomaly_types.pkl --output-results-path output/int8_results.pkl
 ```
 
 The test suite uses generated telemetry fixtures, so it does not require a FastF1 download, GPU, or physical CAN hardware.
+
+## Results
+
+When I got to running the model on the Pi I realised that my Pi wasn't working so I had to run it on my laptop.
+
+### Benefits of Quantisation
+- Unfortunately, I didn't see many differences in performance with quantisation 
+- With size the quantised version had a size of 7kb and the unquantised one had a size of 7.2kb
+- This is probably due to the overhead of quantisation making a large difference because the model is small
+- With bigger models you could probably make out a large difference in size
+- In terms of time the unquantised one ran at 0.014 ms per window prediction while the quantised one was 0.016 ms
+- This was me running it on my laptop so we may see different results on the PI
+- Again, I think it is the overhead of quantisation making a difference here
+### Model Results
+- The reason the recall is low is because of the failure to identify throttle_stuck and gear issues
+- This is because it is hard to inject actual anomalies for throttle_stuck and gear(it just ends up looking like normal data) and I have got to improve the structure of the autoencoder as well
+- Quantised does do worse than unquantised with accuracy as expected but interestingly it is the false negatives where it is much worse 
+#### Unquantised
+Confusion Matrix:
+[[30710   336]
+ [15004 15723]]
+True Positives (Detected Attacks): 15723 | False Positives: 336
+True Negatives (Clean Windows):    30710 | False Negatives: 15004
+
+Precision: 0.9791
+Recall:    0.5117
+F1-Score:  0.6721
+FPR:       1.0823%
+
+--- Recall Breakdown by Injection Type ---
+rpm_spike      : 92.26% detected (7016/7605)
+speed_offset   : 83.54% detected (6486/7764)
+throttle_stuck : 1.33% detected (103/7771)
+gear           : 27.92% detected (2118/7587)
+#### Quantised
+Confusion Matrix:
+[[30707   339]
+ [17034 13693]]
+True Positives (Detected Attacks): 13693 | False Positives: 339
+True Negatives (Clean Windows):    30707 | False Negatives: 17034
+
+Precision: 0.9758
+Recall:    0.4456
+F1-Score:  0.6119
+FPR:       1.0919%
+
+--- Recall Breakdown by Injection Type ---
+rpm_spike      : 89.72% detected (6823/7605)
+speed_offset   : 67.97% detected (5277/7764)
+throttle_stuck : 1.35% detected (105/7771)
+gear           : 19.61% detected (1488/7587)
 
 ## How anomaly detection works
 
@@ -128,11 +183,6 @@ These are deterministic test-time synthetic scenarios, not claims about a partic
 
 ## Notes and next steps
 
-This is a learning and prototyping project. A production deployment would need vehicle-specific signal definitions, a validated threat model, data from the target platform, model calibration under real operating conditions, and hardware-in-the-loop testing.
+- Need to improve model architecture and anomaly injection(look at first few bps on model results)
+- Need to make my Pi work so that I can run this on the Pi
 
-Generated telemetry, caches, checkpoints, and exported models are intentionally local artefacts and should not be committed.
-
-## Improvements
-
-- Use preprocessing in the quantisation step(there is info on quantisation page on onnxruntime) if you want to improve quantisation accuracy
-- Changing thread options in edge_ids_runner.py could affect performance

@@ -11,7 +11,7 @@ import onnxruntime as ort
 # EDGE RUNNER CONFIGURATION
 # ==========================================
 FEATURE_COLUMNS = ["RPM", "Speed", "Throttle", "nGear", "DeltaTime"]# For Codex: try getting this from test data in pickle if possible 
-WINDOW_SIZE = 20# For Codex: try getting this from test data in pickle if possible 
+WINDOW_SIZE = 20
 
 
 class EdgeIDSInferenceEngine:

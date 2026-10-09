@@ -172,7 +172,7 @@ def inject_fault(raw_window: np.ndarray, fault_type: str, rng: np.random.Generat
         )
     elif fault_type == Sensors.THROTTLE.fault.value:
         sensor = Sensors.THROTTLE
-        result[slice_idx, sensor.index] = rng.choice((0, sensor.max_val))
+        result[slice_idx, sensor.index] = rng.uniform(0, sensor.max_val)
     elif fault_type == Sensors.GEAR.fault.value:  # gear manipulation
         sensor = Sensors.GEAR
         result[slice_idx, sensor.index] = np.clip(
