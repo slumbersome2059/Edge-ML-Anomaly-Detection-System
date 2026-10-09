@@ -140,8 +140,11 @@ FPR:       1.0823%
 
 --- Recall Breakdown by Injection Type ---
 rpm_spike      : 92.26% detected (7016/7605)
+
 speed_offset   : 83.54% detected (6486/7764)
+
 throttle_stuck : 1.33% detected (103/7771)
+
 gear           : 27.92% detected (2118/7587)
 #### Quantised
 Confusion Matrix:
