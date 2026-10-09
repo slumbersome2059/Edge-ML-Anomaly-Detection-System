@@ -127,18 +127,26 @@ When I got to running the model on the Pi I realised that my Pi wasn't working s
 - This is because it is hard to inject actual anomalies for throttle_stuck and gear(it just ends up looking like normal data) and I have got to improve the structure of the autoencoder as well
 - Quantised does do worse than unquantised with accuracy as expected but interestingly it is the false negatives where it is much worse 
 #### Unquantised
+
 Confusion Matrix:
+
 [[30710   336]
  [15004 15723]]
+
 True Positives (Detected Attacks): 15723 | False Positives: 336
+
 True Negatives (Clean Windows):    30710 | False Negatives: 15004
 
 Precision: 0.9791
+
 Recall:    0.5117
+
 F1-Score:  0.6721
+
 FPR:       1.0823%
 
 --- Recall Breakdown by Injection Type ---
+
 rpm_spike      : 92.26% detected (7016/7605)
 
 speed_offset   : 83.54% detected (6486/7764)
@@ -146,22 +154,34 @@ speed_offset   : 83.54% detected (6486/7764)
 throttle_stuck : 1.33% detected (103/7771)
 
 gear           : 27.92% detected (2118/7587)
+
 #### Quantised
+
 Confusion Matrix:
+
 [[30707   339]
  [17034 13693]]
+
 True Positives (Detected Attacks): 13693 | False Positives: 339
+
 True Negatives (Clean Windows):    30707 | False Negatives: 17034
 
 Precision: 0.9758
+
 Recall:    0.4456
+
 F1-Score:  0.6119
+
 FPR:       1.0919%
 
 --- Recall Breakdown by Injection Type ---
+
 rpm_spike      : 89.72% detected (6823/7605)
+
 speed_offset   : 67.97% detected (5277/7764)
+
 throttle_stuck : 1.35% detected (105/7771)
+
 gear           : 19.61% detected (1488/7587)
 
 ## How anomaly detection works
